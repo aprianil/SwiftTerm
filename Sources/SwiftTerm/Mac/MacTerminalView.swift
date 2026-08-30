@@ -1199,6 +1199,16 @@ open class TerminalView: NSView, NSTextInputClient, NSUserInterfaceValidations, 
         }
     }
 
+    /// Colour used for the text and underline of a highlighted link. When nil,
+    /// a link keeps the foreground colour of the cells it is printed in.
+    public var urlColor: NSColor? {
+        didSet {
+            urlAttributes.removeAll (keepingCapacity: true)
+            terminal.updateFullScreen()
+            queuePendingDisplay()
+        }
+    }
+
     var linkHighlightRange: [Terminal.LinkMatch.RowRange]?
 
     /**

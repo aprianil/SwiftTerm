@@ -923,8 +923,14 @@ extension TerminalView {
         }
 
         if withUrl {
+            // A link is worth telling apart from the text around it, so an
+            // embedder can give every link one colour rather than inheriting
+            // whatever colour the program happened to print it in. Unset keeps
+            // the historical behaviour: the cell's own foreground.
+            let linkColor = urlColor ?? fgColor
+            nsattr [.foregroundColor] = linkColor
             nsattr [.underlineStyle] = NSUnderlineStyle.single.rawValue
-            nsattr [.underlineColor] = fgColor
+            nsattr [.underlineColor] = linkColor
             nsattr [SwiftTermUnderlineStyleKey] = Int(UnderlineStyle.dashed.rawValue)
 
             // Add to cache; truecolor attributes are unbounded, so cap it
