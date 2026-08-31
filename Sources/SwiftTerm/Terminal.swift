@@ -7605,7 +7605,7 @@ open class Terminal {
         if buffer.lines[row].isWrapped {
             return true
         }
-        return canJoinImplicitRows(upper: row - 1, lower: row, in: buffer)
+        return canJoinImplicitRows(upper: row - 1, lower: row, groupStart: startRow, in: buffer)
     }
 
     private func heuristicImplicitGroup(around row: Int, in buffer: Buffer) -> (start: Int, end: Int)?
@@ -7613,17 +7613,41 @@ open class Terminal {
         var start = row
         var end = row
 
-        while start > 0 && canJoinImplicitRows(upper: start - 1, lower: start, in: buffer) {
+        // Backward, the seam CANNOT be validated: a url carries its scheme on
+        // its first row, and walking up from the middle of one means every seam
+        // we cross is two fragments with no scheme between them. So the walk up
+        // is optimistic, on the edge conditions alone, and the regex over the
+        // whole joined group is what decides. That regex requires a scheme and
+        // the match has to contain the clicked cell, so an optimistic walk over
+        // ordinary prose finds nothing rather than inventing a link.
+        while start > 0,
+              end - start < Self.implicitMaxGroupRows,
+              canJoinImplicitRows(upper: start - 1, lower: start, validateSeam: false, in: buffer) {
             start -= 1
         }
-        while end + 1 < buffer.lines.count && canJoinImplicitRows(upper: end, lower: end + 1, in: buffer) {
+        // Forward, the seam has to be judged against the group SO FAR, not
+        // against one row. A url only carries its scheme on its first row, and
+        // the seam test needs to see a whole link; judging row 2 against row 3
+        // alone means judging two fragments with no `https://` between them,
+        // which never matches, which is how a url that takes three rows used to
+        // arrive with its last row missing.
+        while end + 1 < buffer.lines.count,
+              end - start < Self.implicitMaxGroupRows,
+              canJoinImplicitRows(upper: end, lower: end + 1, groupStart: start, in: buffer) {
             end += 1
         }
 
         return (start == row && end == row) ? nil : (start, end)
     }
 
-    private func canJoinImplicitRows(upper: Int, lower: Int, in buffer: Buffer) -> Bool
+    /// How many rows one implicit link may span. Bounds both the walk and the
+    /// text the seam test regexes, in place of the character window that used to
+    /// do it (a window measured from the seam BACKWARD cannot keep a scheme that
+    /// sits at the group's start).
+    static let implicitMaxGroupRows = 8
+
+    private func canJoinImplicitRows(upper: Int, lower: Int, groupStart: Int? = nil,
+                                     validateSeam: Bool = true, in buffer: Buffer) -> Bool
     {
         guard let upperInfo = linkRowEdgeInfo(row: upper, in: buffer),
               let lowerInfo = linkRowEdgeInfo(row: lower, in: buffer)
@@ -7649,7 +7673,11 @@ open class Terminal {
             return false
         }
 
+        guard validateSeam else {
+            return true
+        }
         return seamContainsGhosttyImplicitLink(
+            groupStart: groupStart,
             upper: upper,
             lower: lower,
             upperLastCol: upperInfo.lastCol,
@@ -7709,6 +7737,7 @@ open class Terminal {
     }
 
     private func seamContainsGhosttyImplicitLink(
+        groupStart: Int? = nil,
         upper: Int,
         lower: Int,
         upperLastCol: Int,
@@ -7728,8 +7757,16 @@ open class Terminal {
         guard upperLimit > 0 else {
             return false
         }
-        let upperStart = max(0, upperLimit - 96)
-        let upperText = implicitLineSegmentText(line: upperLine, startCol: upperStart, endCol: upperLimit)
+        let upperText: String
+        if let groupStart, groupStart < upper {
+            // Every row already in the group, joined the way the line map will
+            // join them, so the scheme at the top is still in the window.
+            upperText = implicitGroupText(from: groupStart, through: upper,
+                                          lastCol: upperLastCol, in: buffer)
+        } else {
+            let upperStart = max(0, upperLimit - 96)
+            upperText = implicitLineSegmentText(line: upperLine, startCol: upperStart, endCol: upperLimit)
+        }
         guard !upperText.isEmpty else {
             return false
         }
@@ -7764,6 +7801,26 @@ open class Terminal {
         }
 
         return false
+    }
+
+    /// Rows `from` through `through`, joined the way `buildGhosttyImplicitLineMap`
+    /// joins them: the first row whole, every later row with its leading indent
+    /// dropped, and the last row stopping at `lastCol`.
+    private func implicitGroupText(from: Int, through: Int, lastCol: Int, in buffer: Buffer) -> String
+    {
+        var text = ""
+        for row in max(0, from)...max(0, through) where row < buffer.lines.count {
+            let line = buffer.lines[row]
+            let rawLimit = min(cols, line.count)
+            guard rawLimit > 0 else { continue }
+            let trimmed = min(rawLimit, line.getTrimmedLength())
+            guard trimmed > 0 else { continue }
+            let endCol = row == through ? min(trimmed, lastCol + 1) : trimmed
+            let startCol = row == from ? 0 : firstNonWhitespaceColumn(in: line, lineLimit: trimmed)
+            guard startCol < endCol else { continue }
+            text += implicitLineSegmentText(line: line, startCol: startCol, endCol: endCol)
+        }
+        return text
     }
 
     private func implicitLineSegmentText(line: BufferLine, startCol: Int, endCol: Int) -> String
