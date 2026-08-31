@@ -1300,13 +1300,59 @@ extension TerminalView {
                             powerlineGlyphs: powerlineGlyphs)
     }
 
+    /// The bare urls on `row`, recomputed only when the screen actually changed.
+    ///
+    /// `shouldUnderlineLink` is asked once per CELL, so the staleness check runs
+    /// on a row change rather than a cell change: 37 checks a draw instead of
+    /// 1776. The check itself is a fold over the visible lines' `generation`
+    /// counters, which BufferLine bumps on every mutation, so a spinner
+    /// repainting one row is detected without diffing a single character.
+    func implicitHighlightRanges(forRow row: Int) -> [Range<Int>]
+    {
+        guard linkReporting == .implicit else { return [] }
+        if row != implicitLinkProbedRow {
+            implicitLinkProbedRow = row
+            let signature = visibleLinkGenerationSignature()
+            if signature != implicitLinkSignature {
+                implicitLinkSignature = signature
+                let top = terminal.displayBuffer.yDisp
+                implicitLinkRanges = terminal.implicitLinkRanges(startRow: top,
+                                                                 endRow: top + terminal.rows - 1)
+            }
+        }
+        return implicitLinkRanges[row] ?? []
+    }
+
+    private func visibleLinkGenerationSignature() -> UInt64
+    {
+        let buffer = terminal.displayBuffer
+        var signature = UInt64(bitPattern: Int64(buffer.yDisp)) &* 0x9E37_79B9_7F4A_7C15
+        let top = max(0, buffer.yDisp)
+        let bottom = min(top + terminal.rows, buffer.lines.count)
+        guard top < bottom else { return signature }
+        for row in top..<bottom {
+            signature = (signature ^ buffer.lines[row].generation) &* 0x0000_0100_0000_01B3
+        }
+        return signature
+    }
+
+    private func hasImplicitHighlight(row: Int, column: Int, width: Int) -> Bool
+    {
+        let cellRange = column..<(column + width)
+        return implicitHighlightRanges(forRow: row).contains { $0.overlaps(cellRange) }
+    }
+
     func shouldUnderlineLink(row: Int, column: Int, width: Int, cell: CharData) -> Bool
     {
         switch linkHighlightMode {
         case .always:
-            return cell.hasPayload
+            // `.always` used to mean "always, if it is an OSC 8 hyperlink",
+            // which is not what the name promises and covers nothing a program
+            // printing plain urls emits. It now honours `linkReporting`: the
+            // links it highlights are the links it would report.
+            return cell.hasPayload || hasImplicitHighlight(row: row, column: column, width: width)
         case .alwaysWithModifier:
-            return commandActive && cell.hasPayload
+            return commandActive && (cell.hasPayload || hasImplicitHighlight(row: row, column: column, width: width))
         case .hover:
             guard let highlights = linkHighlightRange,
                   let highlight = highlights.first(where: { $0.row == row })
@@ -1391,9 +1437,11 @@ extension TerminalView {
     {
         switch linkHighlightMode {
         case .always:
-            return match.isExplicit
+            // Whatever is highlighted must be clickable. Highlighting a url and
+            // then refusing the click is worse than not highlighting it.
+            return match.isExplicit || linkReporting == .implicit
         case .alwaysWithModifier:
-            return match.isExplicit && hasCommandModifier
+            return (match.isExplicit || linkReporting == .implicit) && hasCommandModifier
         case .hover:
             return linkHighlightRange == match.rowRanges
         case .hoverWithModifier:
@@ -1409,9 +1457,10 @@ extension TerminalView {
     func implicitLinkCouldBeVisible(hasCommandModifier: Bool) -> Bool
     {
         switch linkHighlightMode {
-        case .always, .alwaysWithModifier:
-            // Both branches return `match.isExplicit`, so an implicit match never qualifies.
-            return false
+        case .always:
+            return linkReporting == .implicit
+        case .alwaysWithModifier:
+            return hasCommandModifier && linkReporting == .implicit
         case .hover:
             return linkHighlightRange != nil
         case .hoverWithModifier:

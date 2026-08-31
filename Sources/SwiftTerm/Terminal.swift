@@ -7299,6 +7299,96 @@ open class Terminal {
         )
     }
 
+    /// Every implicit link on the given buffer rows, as the column range each
+    /// one occupies on each row it crosses.
+    ///
+    /// `implicitLinkMatch` without the "contains the clicked cell" filter: same
+    /// grouping, same regex, every match rather than one. It exists so a view
+    /// can highlight bare urls at rest instead of only under the pointer, which
+    /// is the difference between a link you can find and a link you have to go
+    /// looking for.
+    ///
+    /// One pass, not one per row: a group is scanned once and the walk resumes
+    /// past its last row, so a wrapped url costs the same as an unwrapped one.
+    public func implicitLinkRanges(startRow: Int, endRow: Int) -> [Int: [Range<Int>]]
+    {
+        guard let regex = Self.ghosttyImplicitLinkRegex else {
+            return [:]
+        }
+        let buffer = displayBuffer
+        var out: [Int: [Range<Int>]] = [:]
+        var row = max(0, startRow)
+        let last = min(endRow, buffer.lines.count - 1)
+
+        while row <= last {
+            let line = buffer.lines[row]
+            let rawLimit = min(cols, line.count)
+            let lineLimit = min(rawLimit, line.getTrimmedLength())
+            guard lineLimit > 0 else { row += 1; continue }
+            // Anchor on the first thing that is not whitespace: the line map
+            // refuses a position that lands in a row's indent.
+            let anchor = firstNonWhitespaceColumn(in: line, lineLimit: lineLimit)
+            // Every scheme this regex knows contains a colon, so a row without
+            // one cannot begin a link. Checking that is a walk over 48 cells;
+            // not checking it means running a backtracking-prone regex over
+            // every row of every screen, most of which hold no links at all.
+            // Measured on real claude screens at the panel's geometry: a full
+            // scan of the slash-command menu went from 2.25ms to well under the
+            // frame budget, and that screen contains no links whatsoever.
+            //
+            // Safe against wrapped links: a url carries its scheme, and so its
+            // colon, on whichever row the match begins, and every row is
+            // considered in turn. That row anchors a group whose walk reaches
+            // backward and forward over the rest of the link.
+            guard anchor < lineLimit,
+                  rowCouldBeginImplicitLink(line: line, from: anchor, to: lineLimit),
+                  let lineMap = buildGhosttyImplicitLineMap(at: Position(col: anchor, row: row), in: buffer)
+            else { row += 1; continue }
+
+            let searchRange = NSRange(lineMap.text.startIndex..<lineMap.text.endIndex, in: lineMap.text)
+            for match in regex.matches(in: lineMap.text, options: [], range: searchRange) {
+                guard match.range.length > 0,
+                      let textRange = Range(match.range, in: lineMap.text)
+                else { continue }
+                if suppressGhosttyLikeMatch(textRange, in: lineMap.text) { continue }
+
+                let startOffset = lineMap.text.distance(from: lineMap.text.startIndex, to: textRange.lowerBound)
+                let rawEnd = lineMap.text.distance(from: lineMap.text.startIndex, to: textRange.upperBound)
+                let endOffset = min(rawEnd, lineMap.cells.count)
+                guard startOffset < endOffset else { continue }
+
+                var bounds: [Int: (start: Int, end: Int)] = [:]
+                for idx in startOffset..<endOffset {
+                    let cell = lineMap.cells[idx]
+                    let cellEnd = cell.col + max(1, cell.width)
+                    if var existing = bounds[cell.row] {
+                        existing.start = min(existing.start, cell.col)
+                        existing.end = max(existing.end, cellEnd)
+                        bounds[cell.row] = existing
+                    } else {
+                        bounds[cell.row] = (start: cell.col, end: cellEnd)
+                    }
+                }
+                for (matchedRow, b) in bounds where b.start < b.end {
+                    out[matchedRow, default: []].append(b.start..<b.end)
+                }
+            }
+
+            var groupEnd = row
+            for cell in lineMap.cells { groupEnd = max(groupEnd, cell.row) }
+            row = max(row + 1, groupEnd + 1)
+        }
+        return out
+    }
+
+    private func rowCouldBeginImplicitLink(line: BufferLine, from: Int, to: Int) -> Bool
+    {
+        for col in from..<to where line[col].code == 58 {   // ':'
+            return true
+        }
+        return false
+    }
+
     private func implicitLinkMatch(at position: Position, in buffer: Buffer) -> LinkMatch?
     {
         guard let lineMap = buildGhosttyImplicitLineMap(at: position, in: buffer) else {

@@ -321,6 +321,14 @@ open class TerminalView: NSView, NSTextInputClient, NSUserInterfaceValidations, 
     // of attributes for an NSAttributedString
     var attributes: [Attribute: [NSAttributedString.Key:Any]] = [:]
     var urlAttributes: [Attribute: [NSAttributedString.Key:Any]] = [:]
+
+    /// Bare urls visible right now, per buffer row, so `.always` can highlight
+    /// them at rest. Rebuilt only when a visible line's `generation` moves; see
+    /// `implicitHighlightRanges(forRow:)`.
+    var implicitLinkRanges: [Int: [Range<Int>]] = [:]
+    var implicitLinkSignature: UInt64 = 0
+    var implicitLinkProbedRow: Int = -1
+
     
     
     // Cache for the colors in the 0..255 range
