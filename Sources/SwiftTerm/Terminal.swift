@@ -6772,6 +6772,45 @@ open class Terminal {
         refresh (startRow: 0, endRow: self.rows - 1)
     }
 
+    /// Removes `count` lines from the scrollback (the region above the visible
+    /// screen), starting at scrollback offset `start` where 0 is the oldest
+    /// scrolled-off line. The visible screen and the lines above `start` are
+    /// left untouched; the lines at and after `start + count` shift down to
+    /// close the gap, and `yBase`/`yDisp` follow so the same screen and reader
+    /// position are preserved. Lines below the reader are unaffected; if the
+    /// reader was parked inside the removed block it lands at its top edge.
+    /// Returns the number of lines actually removed (clamped to what exists).
+    ///
+    /// Additive helper (does not alter any existing path). It gives an embedder
+    /// the one buffer operation the public API otherwise lacks: dropping a
+    /// specific run of scrollback rather than all of it (`clearScrollback`) or
+    /// the oldest beyond a cap (`changeScrollback`). sidealong uses it to drop a
+    /// stale copy of an interactive overlay (claude's `/usage`) that repaints in
+    /// place and re-scrolls its overflow on every refresh, keeping one frame of
+    /// overflow and the transcript beneath it. Normal buffer only; a no-op while
+    /// the alternate buffer is active, which has no scrollback.
+    public func dropScrollbackRows (at start: Int, count: Int) -> Int
+    {
+        if isCurrentBufferAlternate { return 0 }
+        let buffer = normalBuffer
+        let available = buffer.yBase
+        if start < 0 || count <= 0 || start >= available { return 0 }
+        let drop = min (count, available - start)
+        if drop <= 0 { return 0 }
+        buffer.lines.splice (start: start, deleteCount: drop, items: [], change: { _ in })
+        let oldDisp = buffer.yDisp
+        buffer.yBase = buffer.yBase - drop
+        if oldDisp >= start + drop {
+            buffer.yDisp = oldDisp - drop
+        } else if oldDisp > start {
+            buffer.yDisp = start
+        }
+        if buffer.yDisp > buffer.yBase { buffer.yDisp = buffer.yBase }
+        refresh (startRow: 0, endRow: self.rows - 1)
+        tdel?.scrolled (source: self, yDisp: buffer.yDisp)
+        return drop
+    }
+
     public func changeScrollback (_ newScrollback: Int?)
     {
         // Only the normal buffer has scrollback, the alt buffer should never have scrollback.
