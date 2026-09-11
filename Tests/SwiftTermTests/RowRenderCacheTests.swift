@@ -30,7 +30,17 @@ final class RowRenderCacheTests: XCTestCase {
         var text = ""
         for i in 1...lines {
             text += "\u{1b}[38;2;153;153;153m│\u{1b}[39m row \(i) "
-            text += "\u{1b}[1mbold\u{1b}[22m \u{1b}[31mred\u{1b}[39m https://example.com/a/b/\(i) "
+            text += "\u{1b}[1mbold\u{1b}[22m \u{1b}[31mred\u{1b}[39m "
+            // Every other row carries an OSC 8 hyperlink and NO bare url. The
+            // two take different paths through `shouldUnderlineLink`, and the
+            // payload one is the only highlight that depends on the modifier
+            // without depending on anything the row itself carries: a row with
+            // a bare url has the scan's ranges in its key and moves on its own.
+            if i.isMultiple(of: 2) {
+                text += "\u{1b}]8;;https://example.com/osc/\(i)\u{1b}\\link\u{1b}]8;;\u{1b}\\ "
+            } else {
+                text += "https://example.com/a/b/\(i) "
+            }
             text += "\u{1b}[38;5;12mbright\u{1b}[39m ▛▀▄ ──────\r\n"
         }
         view.feed(byteArray: ArraySlice(Array(text.utf8)))
@@ -107,6 +117,16 @@ final class RowRenderCacheTests: XCTestCase {
         assertCacheIsInvisible(view, "urls underlined at rest")
         view.linkHighlightMode = .hover
         assertCacheIsInvisible(view, "urls no longer underlined")
+
+        // The modifier decides how a link is drawn in exactly two modes, and
+        // the cache is keyed on it only there. Both directions, because
+        // pressing it and letting it go are two different stale rows.
+        view.linkHighlightMode = .alwaysWithModifier
+        assertCacheIsInvisible(view, "the modifier gate, key up")
+        view.commandActive = true
+        assertCacheIsInvisible(view, "the modifier gate, key down")
+        view.commandActive = false
+        assertCacheIsInvisible(view, "the modifier gate, released again")
     }
 
     func testAColorChangeRebuildsEveryRow () {

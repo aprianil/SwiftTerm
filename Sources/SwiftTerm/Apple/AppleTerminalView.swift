@@ -1455,6 +1455,14 @@ extension TerminalView {
         rowRenderCacheSignature = nil
     }
 
+    /// Whether the modifier key currently decides how a link is drawn.
+    private var modifierGatesLinkHighlight: Bool {
+        switch linkHighlightMode {
+        case .alwaysWithModifier, .hoverWithModifier: return true
+        case .always, .hover: return false
+        }
+    }
+
     /// The view-wide inputs to a built row, cheap enough to recompute per draw.
     private func rowRenderViewSignature (cols: Int) -> RowRenderViewSignature
     {
@@ -1464,7 +1472,11 @@ extension TerminalView {
             cellDimension: cellDimension,
             isAltBuffer: terminal.isCurrentBufferAlternate,
             blinkVisible: textBlinkVisible,
-            commandActive: commandActive,
+            // Only where it can change a row: in the two modes that gate the
+            // underline on the modifier. Otherwise every press and release of
+            // the modifier key would drop a screenful of built rows for a
+            // setting that draws nothing.
+            commandActive: modifierGatesLinkHighlight && commandActive,
             reverseColors: terminal.reverseColors,
             customBlockGlyphs: customBlockGlyphs,
             useBrightColors: useBrightColors,
