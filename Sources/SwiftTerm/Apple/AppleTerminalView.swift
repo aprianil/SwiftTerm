@@ -206,6 +206,54 @@ struct ViewLineInfo {
     var powerlineGlyphs: [PowerlineRenderItem]
 }
 
+/// What a built row depends on beyond the view-wide state: the line's own
+/// revision, plus the three things the CoreText builder reads that the line
+/// itself does not carry (this row's selection, its link highlights, and the
+/// bidi paragraph it belongs to).
+struct RowRenderSignature: Equatable {
+    let generation: UInt64
+    let bidiRevision: Int
+    let cols: Int
+    let selection: Range<Int>?
+    let implicitLinks: [Range<Int>]
+    let hoverLink: Range<Int>?
+}
+
+/// Turns the per-row cache off, so a test can draw the same screen with and
+/// without it and compare the pixels. Not public API: it exists for the test
+/// that proves the cache is invisible.
+var rowRenderCacheEnabled = true
+
+/// One row's built line, kept beside the line object it was built from.
+final class RowRenderCacheEntry {
+    let line: BufferLine
+    let signature: RowRenderSignature
+    let info: ViewLineInfo
+
+    init (line: BufferLine, signature: RowRenderSignature, info: ViewLineInfo) {
+        self.line = line
+        self.signature = signature
+        self.info = info
+    }
+}
+
+/// The view-wide state every built row depends on. A change here is a
+/// wholesale clear rather than a per-row test, the way the Metal renderer's
+/// `CacheSignature` works: these move on a resize, a font change, a blink
+/// phase, or the modifier key, all of which repaint the whole view anyway.
+struct RowRenderViewSignature: Equatable {
+    let cols: Int
+    let rows: Int
+    let cellDimension: CGSize
+    let isAltBuffer: Bool
+    let blinkVisible: Bool
+    let commandActive: Bool
+    let reverseColors: Bool
+    let linkHighlightMode: LinkHighlightMode
+    let linkReporting: LinkReporting
+    let bidiHostPolicy: BidiHostPolicy
+}
+
 /// How to place a single glyph within its `columnWidth`-cell slot.
 ///
 /// Full-width (CJK) and other substituted glyphs would otherwise be pinned to
@@ -291,6 +339,8 @@ extension TerminalView {
         self.urlAttributes = [:]
         self.colors = Array(repeating: nil, count: 256)
         self.trueColors = [:]
+        self.rowRenderCache.removeAll ()
+        self.rowRenderCacheSignature = nil
     }
     
     // This is invoked when the font changes to recompute state
@@ -568,6 +618,8 @@ extension TerminalView {
         urlAttributes = [:]
         attributes = [:]
         clearCGColorCache()
+        rowRenderCache.removeAll ()
+        rowRenderCacheSignature = nil
 
 #if os(macOS)
         if !isUsingMetalRenderer {
@@ -1373,6 +1425,108 @@ extension TerminalView {
         }
     }
 
+    /// The view-wide inputs to a built row, cheap enough to recompute per draw.
+    private func rowRenderViewSignature (cols: Int) -> RowRenderViewSignature
+    {
+        RowRenderViewSignature(
+            cols: cols,
+            rows: terminal.rows,
+            cellDimension: cellDimension,
+            isAltBuffer: terminal.isCurrentBufferAlternate,
+            blinkVisible: textBlinkVisible,
+            commandActive: commandActive,
+            reverseColors: terminal.reverseColors,
+            linkHighlightMode: linkHighlightMode,
+            linkReporting: linkReporting,
+            bidiHostPolicy: bidiHostPolicy)
+    }
+
+    /// Drops the built rows this draw cannot reuse and bounds the cache to what
+    /// is on screen. Called once at the top of a draw.
+    func prepareRowRenderCache (firstRow: Int, lastRow: Int, cols: Int)
+    {
+        guard rowRenderCacheEnabled else { return }
+        let visible = firstRow...max(firstRow, lastRow)
+        let previous = rowRenderCacheVisible
+        rowRenderCacheVisible = visible
+        let signature = rowRenderViewSignature(cols: cols)
+        if signature != rowRenderCacheSignature {
+            rowRenderCacheSignature = signature
+            rowRenderCache.removeAll (keepingCapacity: true)
+            return
+        }
+        guard let previous, previous != visible else { return }
+        // Keep the cache the size of the screen. A scroll of a row or two drops
+        // the rows that left; a jump that lands somewhere else entirely (a new
+        // screenful of output) drops everything, which is cheaper than sieving
+        // a dictionary that has nothing left in it worth keeping.
+        guard previous.overlaps(visible) else {
+            rowRenderCache.removeAll (keepingCapacity: true)
+            return
+        }
+        var stale: [Int] = []
+        for row in rowRenderCache.keys where !visible.contains(row) {
+            stale.append(row)
+        }
+        for row in stale {
+            rowRenderCache.removeValue (forKey: row)
+        }
+    }
+
+    /// `buildAttributedString` for `row`, reusing the previous build when
+    /// nothing that row is drawn from has moved.
+    ///
+    /// Building the attributed strings is the expensive half of a draw
+    /// (measured at 48x36: 1.77 ms of a 2.89 ms draw), and the per-row
+    /// dirty-rect skip further down cannot avoid it because AppKit hands us a
+    /// full-view rect regardless of how little changed. Caching by CONTENT
+    /// rather than by geometry is the version of that optimization that does
+    /// not depend on the exposed region being honest: a scroll, a sub-row
+    /// translation and a one-row repaint all re-expose the whole view, and
+    /// every row whose content did not move is still a hit.
+    ///
+    /// Validity is the test the Metal renderer's row cache already uses: the
+    /// absolute row must still map to the same `BufferLine` object (a scroll
+    /// rotates references inside the CircularList, and a scrollback trim shifts
+    /// them) and that line's `generation` must not have moved. `BufferLine`
+    /// bumps `generation` on every mutation, including the clear that recycles
+    /// a line, so content equality needs no diff.
+    func cachedLineInfo (row: Int, line: BufferLine, cols: Int) -> ViewLineInfo
+    {
+        guard rowRenderCacheEnabled else {
+            return buildAttributedString(row: row, line: line, cols: cols)
+        }
+        // Ask for the highlights only in the mode that draws them, the gate
+        // `shouldUnderlineLink` applies. Asking unconditionally would run the
+        // implicit-url scan on screens that never highlight a url, which is a
+        // cost the uncached path does not pay. `commandActive` is part of the
+        // view signature, so folding it into the gate is safe: it moving is a
+        // wholesale clear.
+        let underliningImplicitLinks = linkHighlightMode == .always
+            || (linkHighlightMode == .alwaysWithModifier && commandActive)
+        let underliningHover = linkHighlightMode == .hover
+            || (linkHighlightMode == .hoverWithModifier && commandActive)
+        let signature = RowRenderSignature(
+            generation: line.generation,
+            bidiRevision: TerminalBidi.layoutRevision(
+                row: row, buffer: terminal.displayBuffer,
+                maximumRows: terminal.options.maximumBidiParagraphRows),
+            cols: cols,
+            selection: selectedColumnsRange(row: row, cols: cols),
+            implicitLinks: underliningImplicitLinks ? implicitHighlightRanges(forRow: row) : [],
+            hoverLink: underliningHover
+                ? linkHighlightRange?.first (where: { $0.row == row })?.range
+                : nil)
+        if let entry = rowRenderCache[row], entry.line === line, entry.signature == signature {
+            rowRenderCacheHits &+= 1
+            return entry.info
+        }
+        let info = buildAttributedString(row: row, line: line, cols: cols)
+        rowRenderCache[row] = RowRenderCacheEntry(line: line, signature: signature, info: info)
+        rowRenderCacheMisses &+= 1
+        return info
+    }
+
     // The payload contains terminal data expected to be in the form:
     // "k=v:k2=v2;URL"
     func urlAndParamsFrom(payload: String) -> (String, [String:String])?
@@ -1846,6 +2000,8 @@ extension TerminalView {
         let lastRow = displayBuffer.yDisp+Int((boundsMaxY-dirtyRect.minY)/cellHeight)
         #endif
 
+        prepareRowRenderCache(firstRow: firstRow, lastRow: lastRow, cols: displayBuffer.cols)
+
         let isAltBuffer = terminal.isCurrentBufferAlternate
         var virtualPlacementsByImageId: [UInt32: [KittyPlacementRecord]] = [:]
         if !terminal.kittyGraphicsState.placementsByKey.isEmpty {
@@ -1926,7 +2082,7 @@ extension TerminalView {
             } 
             #endif
             let line = displayBuffer.lines [row]
-            let lineInfo = buildAttributedString(row: row, line: line, cols: displayBuffer.cols)
+            let lineInfo = cachedLineInfo(row: row, line: line, cols: displayBuffer.cols)
             let rowBase = lineOrigin.y + cellDimension.height
             var underTextImages: [AppleImage] = []
             var overTextKittyImages: [AppleImage] = []

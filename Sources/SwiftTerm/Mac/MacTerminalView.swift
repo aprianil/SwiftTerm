@@ -339,6 +339,17 @@ open class TerminalView: NSView, NSTextInputClient, NSUserInterfaceValidations, 
     var implicitLinkSignature: UInt64 = 0
     var implicitLinkProbedRow: Int = -1
 
+    /// Built rows kept between draws, keyed by absolute buffer row; see
+    /// `cachedLineInfo(row:line:cols:)`. Bounded to the visible rows by
+    /// `prepareRowRenderCache`, and dropped wholesale by `resetCaches` and
+    /// `colorsChanged`.
+    var rowRenderCache: [Int: RowRenderCacheEntry] = [:]
+    var rowRenderCacheSignature: RowRenderViewSignature? = nil
+    var rowRenderCacheVisible: ClosedRange<Int>? = nil
+    /// Counters for the tests that assert the cache is actually reused.
+    var rowRenderCacheHits: Int = 0
+    var rowRenderCacheMisses: Int = 0
+
     
     
     // Cache for the colors in the 0..255 range
