@@ -166,11 +166,11 @@ final class RowRenderCacheTests: XCTestCase {
         let view = makeView()
         fill(view)
         _ = pixels(of: view)
-        view.rowRenderCacheHits = 0
-        view.rowRenderCacheMisses = 0
+        let before = view.rowRenderCacheStats
         _ = pixels(of: view)
-        XCTAssertEqual(view.rowRenderCacheMisses, 0, "an unchanged screen rebuilt rows")
-        XCTAssertGreaterThan(view.rowRenderCacheHits, 0, "nothing was reused")
+        let after = view.rowRenderCacheStats
+        XCTAssertEqual(after.rebuilt - before.rebuilt, 0, "an unchanged screen rebuilt rows")
+        XCTAssertGreaterThan(after.reused - before.reused, 0, "nothing was reused")
     }
 
     func testTheCacheStaysTheSizeOfTheScreen () {

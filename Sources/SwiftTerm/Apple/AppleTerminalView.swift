@@ -219,6 +219,18 @@ struct RowRenderSignature: Equatable {
     let hoverLink: Range<Int>?
 }
 
+/// What the draws so far did with the per-row render cache: rows reused
+/// against rows built. Monotonic for the life of the view.
+///
+/// Public because a cache that quietly stops working looks exactly like a
+/// slower machine. An embedder holding a draw budget can assert on this
+/// instead of on a stopwatch, and find out that the cache died rather than
+/// that the number drifted.
+public struct RowRenderCacheStats: Equatable, Sendable {
+    public let reused: Int
+    public let rebuilt: Int
+}
+
 /// Turns the per-row cache off, so a test can draw the same screen with and
 /// without it and compare the pixels. Not public API: it exists for the test
 /// that proves the cache is invisible.
@@ -1423,6 +1435,11 @@ extension TerminalView {
             let cellRange = column..<(column + width)
             return highlight.range.overlaps(cellRange)
         }
+    }
+
+    /// What the draws so far did with the per-row render cache.
+    public var rowRenderCacheStats: RowRenderCacheStats {
+        RowRenderCacheStats(reused: rowRenderCacheHits, rebuilt: rowRenderCacheMisses)
     }
 
     /// Drop every built row.
