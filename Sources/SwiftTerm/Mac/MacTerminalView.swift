@@ -3238,7 +3238,14 @@ open class TerminalView: NSView, NSTextInputClient, NSUserInterfaceValidations, 
         didSet { scrollSensitivity = max(0.05, scrollSensitivity) }
     }
 
-    public override func scrollWheel(with event: NSEvent) {
+    // `open`, so an embedder can decide the wheel means something else in its
+    // own subclass. The default below is right for a terminal that owns its
+    // screen: with the application tracking the mouse, the wheel belongs to
+    // the application. An embedder that renders one byte stream into two views
+    // — a pinned live one and a transcript one — needs the transcript's wheel
+    // to stay a scroll of its own scrollback whatever mode the application
+    // set, and there is no way to express that from outside the framework.
+    open override func scrollWheel(with event: NSEvent) {
         // Preserves the previous `deltaY == 0` early exit, restated against the
         // delta this method now reads. Without it a zero delta would fall into
         // the non-precise branch below and be turned into a spurious -1 line.
