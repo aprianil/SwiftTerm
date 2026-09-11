@@ -249,6 +249,8 @@ struct RowRenderViewSignature: Equatable {
     let blinkVisible: Bool
     let commandActive: Bool
     let reverseColors: Bool
+    let customBlockGlyphs: Bool
+    let useBrightColors: Bool
     let linkHighlightMode: LinkHighlightMode
     let linkReporting: LinkReporting
     let bidiHostPolicy: BidiHostPolicy
@@ -339,8 +341,7 @@ extension TerminalView {
         self.urlAttributes = [:]
         self.colors = Array(repeating: nil, count: 256)
         self.trueColors = [:]
-        self.rowRenderCache.removeAll ()
-        self.rowRenderCacheSignature = nil
+        invalidateRowRenderCache ()
     }
     
     // This is invoked when the font changes to recompute state
@@ -618,8 +619,7 @@ extension TerminalView {
         urlAttributes = [:]
         attributes = [:]
         clearCGColorCache()
-        rowRenderCache.removeAll ()
-        rowRenderCacheSignature = nil
+        invalidateRowRenderCache ()
 
 #if os(macOS)
         if !isUsingMetalRenderer {
@@ -1425,6 +1425,19 @@ extension TerminalView {
         }
     }
 
+    /// Drop every built row.
+    ///
+    /// For the view-wide settings that change what a row looks like without
+    /// touching a line: the selection colours and the link colour, whose
+    /// setters only ask for a repaint. Anything that can be compared for the
+    /// price of a `Bool` is in `RowRenderViewSignature` instead, and the font
+    /// and the palette come through `resetCaches` and `colorsChanged`.
+    func invalidateRowRenderCache ()
+    {
+        rowRenderCache.removeAll (keepingCapacity: true)
+        rowRenderCacheSignature = nil
+    }
+
     /// The view-wide inputs to a built row, cheap enough to recompute per draw.
     private func rowRenderViewSignature (cols: Int) -> RowRenderViewSignature
     {
@@ -1436,6 +1449,8 @@ extension TerminalView {
             blinkVisible: textBlinkVisible,
             commandActive: commandActive,
             reverseColors: terminal.reverseColors,
+            customBlockGlyphs: customBlockGlyphs,
+            useBrightColors: useBrightColors,
             linkHighlightMode: linkHighlightMode,
             linkReporting: linkReporting,
             bidiHostPolicy: bidiHostPolicy)

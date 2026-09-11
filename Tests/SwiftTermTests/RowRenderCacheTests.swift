@@ -31,7 +31,7 @@ final class RowRenderCacheTests: XCTestCase {
         for i in 1...lines {
             text += "\u{1b}[38;2;153;153;153m│\u{1b}[39m row \(i) "
             text += "\u{1b}[1mbold\u{1b}[22m \u{1b}[31mred\u{1b}[39m https://example.com/a/b/\(i) "
-            text += "──────\r\n"
+            text += "\u{1b}[38;5;12mbright\u{1b}[39m ▛▀▄ ──────\r\n"
         }
         view.feed(byteArray: ArraySlice(Array(text.utf8)))
     }
@@ -133,6 +133,33 @@ final class RowRenderCacheTests: XCTestCase {
         assertCacheIsInvisible(view, "the hidden half of a blink")
         view.setTextBlinkVisibleForTesting(true)
         assertCacheIsInvisible(view, "the visible half of a blink")
+    }
+
+    /// The view-wide settings whose setters only ask for a repaint: they
+    /// change what every row looks like without touching a single line, so
+    /// nothing about a line can tell the cache they moved.
+    func testAViewWideSettingRebuildsEveryRow () {
+        let view = makeView()
+        view.linkHighlightMode = .always
+        fill(view)
+        _ = pixels(of: view)
+        view.urlColor = NSColor(red: 1, green: 0, blue: 1, alpha: 1)
+        assertCacheIsInvisible(view, "a new link colour")
+
+        view.selection.setSelection(start: Position(col: 0, row: view.getTerminal().buffer.yDisp),
+                                    end: Position(col: 30, row: view.getTerminal().buffer.yDisp + 4))
+        _ = pixels(of: view)
+        view.selectedTextBackgroundColor = NSColor(red: 1, green: 0.5, blue: 0, alpha: 1)
+        assertCacheIsInvisible(view, "a new selection background")
+        view.selectedTextForegroundColor = NSColor(red: 0, green: 0, blue: 1, alpha: 1)
+        assertCacheIsInvisible(view, "a new selection foreground")
+
+        view.selection.selectNone()
+        _ = pixels(of: view)
+        view.customBlockGlyphs = !view.customBlockGlyphs
+        assertCacheIsInvisible(view, "block glyphs drawn the other way")
+        view.useBrightColors = !view.useBrightColors
+        assertCacheIsInvisible(view, "bright colours turned off")
     }
 
     func testTheSecondDrawOfAnUnchangedScreenBuildsNothing () {

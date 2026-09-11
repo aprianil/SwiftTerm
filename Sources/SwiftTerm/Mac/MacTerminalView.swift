@@ -1084,6 +1084,7 @@ open class TerminalView: NSView, NSTextInputClient, NSUserInterfaceValidations, 
         }
         set {
             _selectedTextBackgroundColor = newValue
+            invalidateRowRenderCache()
             terminal.updateFullScreen()
             queuePendingDisplay()
         }
@@ -1097,6 +1098,7 @@ open class TerminalView: NSView, NSTextInputClient, NSUserInterfaceValidations, 
         }
         set {
             _selectedTextForegroundColor = newValue
+            invalidateRowRenderCache()
             terminal.updateFullScreen()
             queuePendingDisplay()
         }
@@ -1253,6 +1255,7 @@ open class TerminalView: NSView, NSTextInputClient, NSUserInterfaceValidations, 
     public var urlColor: NSColor? {
         didSet {
             urlAttributes.removeAll (keepingCapacity: true)
+            invalidateRowRenderCache()
             terminal.updateFullScreen()
             queuePendingDisplay()
         }

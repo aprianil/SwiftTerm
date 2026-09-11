@@ -166,6 +166,7 @@ open class TerminalView: UIScrollView, UITextInputTraits, UIKeyInput, UIScrollVi
     public var urlColor: UIColor? {
         didSet {
             urlAttributes.removeAll (keepingCapacity: true)
+            invalidateRowRenderCache()
             terminal.updateFullScreen()
             queuePendingDisplay()
         }
@@ -1640,6 +1641,7 @@ open class TerminalView: UIScrollView, UITextInputTraits, UIKeyInput, UIScrollVi
         }
         set {
             _selectedTextBackgroundColor = newValue
+            invalidateRowRenderCache()
             terminal.updateFullScreen()
             queuePendingDisplay()
         }
@@ -1653,6 +1655,7 @@ open class TerminalView: UIScrollView, UITextInputTraits, UIKeyInput, UIScrollVi
         }
         set {
             _selectedTextForegroundColor = newValue
+            invalidateRowRenderCache()
             terminal.updateFullScreen()
             queuePendingDisplay()
         }
