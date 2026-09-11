@@ -2687,6 +2687,22 @@ extension TerminalView {
         }
     }
     
+    /// The number of rows of scrollback sitting above the screen: the largest
+    /// row `scrollTo(row:)` will accept, and the value `yDisp` takes when the
+    /// view is parked at its bottom.
+    ///
+    /// Without this the only way to read the size of the scrollback from
+    /// outside the framework is to park the view at its bottom and read
+    /// `yDisp`, because `Buffer.lines` is not public. Parking costs a full
+    /// refresh and an `updateDisplay` of every visible row, and parking back
+    /// afterwards costs a second one, so a caller that only wanted the NUMBER
+    /// pays two whole-screen rebuilds for it — on every feed, if it is keeping
+    /// a second view seated against this one.
+    public var scrollbackRows: Int {
+        let displayBuffer = terminal.displayBuffer
+        return max(0, displayBuffer.lines.count - displayBuffer.rows)
+    }
+
     /// <summary>
     /// Gets a value indicating whether or not the user can scroll the terminal contents
     /// </summary>
