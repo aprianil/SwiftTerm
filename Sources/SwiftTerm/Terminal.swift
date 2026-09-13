@@ -6789,6 +6789,16 @@ open class Terminal {
     /// place and re-scrolls its overflow on every refresh, keeping one frame of
     /// overflow and the transcript beneath it. Normal buffer only; a no-op while
     /// the alternate buffer is active, which has no scrollback.
+    /// Rows of scrollback above the screen: the largest `start` plus `count`
+    /// `dropScrollbackRows` will act on, and where line `rows` of the visible
+    /// screen begins when the buffer is read from its oldest line. The view's
+    /// `scrollbackRows` reads the same number off the line count; this one is
+    /// for an embedder holding a `Terminal` and no view, a headless test for
+    /// one. Normal buffer only; the alternate buffer has no scrollback.
+    public var scrollbackRows: Int {
+        isCurrentBufferAlternate ? 0 : normalBuffer.yBase
+    }
+
     public func dropScrollbackRows (at start: Int, count: Int) -> Int
     {
         if isCurrentBufferAlternate { return 0 }
