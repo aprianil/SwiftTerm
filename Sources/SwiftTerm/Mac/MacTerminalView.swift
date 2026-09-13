@@ -3402,6 +3402,14 @@ open class TerminalView: NSView, NSTextInputClient, NSUserInterfaceValidations, 
         }
         if caretView.superview == nil {
             addSubview(caretView)
+            // A layer that leaves the tree loses its animations, so the
+            // blink died with the first hide and never came back: a program
+            // that hides the cursor while it redraws (every full-screen one
+            // does) left the caret steady for good. Re-armed on every show,
+            // which also means a caret shown at the end of each frame of a
+            // busy redraw stays lit until the program goes quiet, and only
+            // then blinks.
+            caretView.updateCursorStyle()
         }
     }
 

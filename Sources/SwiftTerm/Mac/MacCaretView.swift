@@ -90,17 +90,22 @@ class CaretView: NSView, CALayerDelegate {
         updateView ()
     }
     
+    /// How the caret blinks: on and off, half a second each, the way the
+    /// system's own insertion point and Terminal.app's block do. It was a
+    /// 0.7 s ease-in fade out and back, which reads as breathing rather
+    /// than blinking.
+    public static var blinkPeriod: TimeInterval = 1.0
+
     func updateAnimation (to: Bool) {
         layer?.removeAllAnimations()
         self.layer?.opacity = 1
         if to {
-            let anim = CABasicAnimation.init(keyPath: #keyPath (CALayer.opacity))
-            anim.duration = 0.7
-            anim.autoreverses = true
+            let anim = CAKeyframeAnimation (keyPath: #keyPath (CALayer.opacity))
+            anim.values = [1, 0]
+            anim.keyTimes = [0, 0.5]
+            anim.calculationMode = .discrete
+            anim.duration = Self.blinkPeriod
             anim.repeatCount = Float.infinity
-            anim.fromValue = NSNumber (floatLiteral: 1)
-            anim.toValue = NSNumber (floatLiteral: 0)
-            anim.timingFunction = CAMediaTimingFunction (name: .easeIn)
             layer?.add(anim, forKey: #keyPath (CALayer.opacity))
         }
     }
