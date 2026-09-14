@@ -553,6 +553,9 @@ extension TerminalView {
 
     func mapColor (color: Attribute.Color, isFg: Bool, isBold: Bool, useBrightColors: Bool = true) -> TTColor
     {
+        if !isFg, let override = backgroundColorOverrides [color] {
+            return override
+        }
         switch color {
         case .defaultColor:
             if isFg {
@@ -632,6 +635,7 @@ extension TerminalView {
     func colorsChanged ()
     {
         urlAttributes = [:]
+        hoveredUrlAttributes = [:]
         attributes = [:]
         clearCGColorCache()
         invalidateRowRenderCache ()

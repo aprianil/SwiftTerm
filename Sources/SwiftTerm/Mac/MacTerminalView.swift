@@ -356,6 +356,21 @@ open class TerminalView: NSView, NSTextInputClient, NSUserInterfaceValidations, 
     // Cache for the colors in the 0..255 range
     var colors: [NSColor?] = Array(repeating: nil, count: 256)
     var trueColors: [Attribute.Color:NSColor] = [:]
+
+    /// A cell background the program prints in one colour, drawn in another,
+    /// alpha included. Keyed by the colour as the program named it (a palette
+    /// index or a truecolor triple), so an embedder can pick out the one
+    /// block a program paints, a message it echoes back say, and give it a
+    /// translucent ground that rides the window's own instead of an opaque
+    /// grey that sits on top of it. Foregrounds are not touched. Empty by
+    /// default, which is the historical behaviour.
+    public var backgroundColorOverrides: [Attribute.Color: NSColor] = [:] {
+        didSet {
+            colorsChanged()
+            terminal.updateFullScreen()
+            queuePendingDisplay()
+        }
+    }
     var transparent = TTColor.transparent ()
     var isBigSur = true
     
