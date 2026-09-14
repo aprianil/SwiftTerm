@@ -125,3 +125,73 @@ final class BackgroundRuleTests: XCTestCase {
     }
 }
 #endif
+
+#if os(macOS)
+final class BackgroundBlockPaddingTests: XCTestCase {
+    private let grey = Attribute.Color.ansi256(code: 237)
+
+    /// Row 0 blank, row 1 the block, row 2 blank, row 3 text.
+    private func makeView (rowAbove: String = "") -> TerminalView {
+        _ = NSApplication.shared
+        var options = TerminalOptions.default
+        options.cols = 40
+        options.rows = 5
+        let font = NSFont.monospacedSystemFont(ofSize: 13, weight: .regular)
+        let view = TerminalView(frame: NSRect(x: 0, y: 0, width: 400, height: 100),
+                                font: font, options: options)
+        view.nativeBackgroundColor = .black
+        view.backgroundColorOverrides = [grey: .blue]
+        view.backgroundRules = [grey: .red]
+        view.backgroundRuleWidth = 2
+        view.feed(byteArray: ArraySlice(Array("\(rowAbove)\r\n\u{1b}[48;5;237m echoed words                    \u{1b}[49m\r\n\r\ntext\r\n".utf8)))
+        return view
+    }
+
+    private func bitmap (of view: TerminalView) -> NSBitmapImageRep {
+        let rep = view.bitmapImageRepForCachingDisplay(in: view.bounds)!
+        view.cacheDisplay(in: view.bounds, to: rep)
+        return rep
+    }
+
+    func testABlankNeighbourLendsTheBlockItsPadding () {
+        let view = makeView()
+        let cell = view.cellDimension!
+        let scale = CGFloat(bitmap(of: view).pixelsWide) / view.bounds.width
+        let midX = Int(cell.width * 10 * scale)
+        let ruleX = Int(1 * scale)
+        // Two points into the blank row above the block, and two into the one below.
+        let aboveY = Int((cell.height * 1 - 2) * scale)
+        let belowY = Int((cell.height * 2 + 2) * scale)
+
+        let bare = bitmap(of: view)
+        XCTAssertLessThan(bare.colorAt(x: midX, y: aboveY)!.blueComponent, 0.5, "no padding by default")
+        XCTAssertLessThan(bare.colorAt(x: midX, y: belowY)!.blueComponent, 0.5)
+
+        view.backgroundBlockPadding = 6
+        let padded = bitmap(of: view)
+        XCTAssertGreaterThan(padded.colorAt(x: midX, y: aboveY)!.blueComponent, 0.9, "the fill reaches into the blank row above")
+        XCTAssertGreaterThan(padded.colorAt(x: midX, y: belowY)!.blueComponent, 0.9, "and into the one below")
+        XCTAssertGreaterThan(padded.colorAt(x: ruleX, y: aboveY)!.redComponent, 0.9, "the rule comes with it")
+        XCTAssertGreaterThan(padded.colorAt(x: ruleX, y: belowY)!.redComponent, 0.9)
+        // Beyond the padding the blank row is still blank.
+        let farY = Int((cell.height * 2 + 6 + 3) * scale)
+        XCTAssertLessThan(padded.colorAt(x: midX, y: farY)!.blueComponent, 0.5)
+        // And the words' own row is untouched: still the fill, no red past the rule.
+        let wordsY = Int((cell.height * 1.5) * scale)
+        XCTAssertGreaterThan(padded.colorAt(x: midX, y: wordsY)!.blueComponent, 0.9)
+    }
+
+    func testANeighbourWithContentLendsNothing () {
+        let view = makeView(rowAbove: "a line of text above")
+        view.backgroundBlockPadding = 6
+        let cell = view.cellDimension!
+        let rep = bitmap(of: view)
+        let scale = CGFloat(rep.pixelsWide) / view.bounds.width
+        let aboveY = Int((cell.height * 1 - 2) * scale)
+        let belowY = Int((cell.height * 2 + 2) * scale)
+        let midX = Int(cell.width * 30 * scale)
+        XCTAssertLessThan(rep.colorAt(x: midX, y: aboveY)!.blueComponent, 0.5, "a row with words on it is not drawn over")
+        XCTAssertGreaterThan(rep.colorAt(x: midX, y: belowY)!.blueComponent, 0.9, "the blank row below still lends")
+    }
+}
+#endif

@@ -2070,6 +2070,38 @@ extension TerminalView {
             (mapColor(color: $0.key, isFg: false, isBold: false), $0.value)
         }
         var ruledRow = Int.min
+
+        /// The block on a row, if the row carries a ruled background: the
+        /// columns it spans, the colour it is filled with, and its rule.
+        func block (onRow r: Int) -> (span: Range<Int>, fill: TTColor, rule: TTColor)? {
+            guard !rules.isEmpty, r >= 0, r < displayBuffer.lines.count else { return nil }
+            let line = displayBuffer.lines [r]
+            var first = -1, last = -1
+            var found: (fill: TTColor, rule: TTColor)? = nil
+            for c in 0..<min(line.count, terminal.cols) {
+                let bg = line [c].attribute.bg
+                guard let rule = backgroundRules [bg] else { continue }
+                if first < 0 {
+                    first = c
+                    found = (mapColor(color: bg, isFg: false, isBold: false), rule)
+                }
+                last = c
+            }
+            guard let found, first >= 0 else { return nil }
+            return (first..<(last + 1), found.fill, found.rule)
+        }
+        /// A row with nothing drawn on it: no glyph but blanks, no background.
+        func isBlank (row r: Int) -> Bool {
+            guard r >= 0, r < displayBuffer.lines.count else { return false }
+            let line = displayBuffer.lines [r]
+            for c in 0..<min(line.count, terminal.cols) {
+                let cell = line [c]
+                if (cell.code != 0 && cell.code != 32) || cell.attribute.bg != .defaultColor {
+                    return false
+                }
+            }
+            return true
+        }
         // draw lines
         #if os(iOS) || os(visionOS)
         // On iOS, use contentOffset.y to determine the first visible row rather than
@@ -2309,6 +2341,35 @@ extension TerminalView {
             }
 
             context.restoreGState()
+
+            // The block's padding: a blank row beside a ruled block lends
+            // it `backgroundBlockPadding` points of its own height, fill
+            // and rule both, so the block has air above and below its words
+            // without a row of the program's being invented. Drawn by the
+            // blank row, not the block, so a redraw of either row leaves
+            // the other's pixels as they were.
+            if backgroundBlockPadding > 0, !rules.isEmpty, isBlank(row: row) {
+                let pad = min(backgroundBlockPadding, cellDimension.height)
+                func lend (_ block: (span: Range<Int>, fill: TTColor, rule: TTColor), y: CGFloat) {
+                    let x = lineOrigin.x + CGFloat(block.span.lowerBound) * cellDimension.width
+                    let width = CGFloat(block.span.count) * cellDimension.width
+                    context.setFillColor(cachedCGColor(block.fill))
+                    context.fill(CGRect(x: x, y: y, width: width, height: pad))
+                    context.setFillColor(cachedCGColor(block.rule))
+                    context.fill(CGRect(x: x, y: y, width: backgroundRuleWidth, height: pad))
+                }
+                context.saveGState()
+                context.setShouldAntialias(false)
+                // The row above on screen is the smaller index, and this
+                // row's top edge is the one it shares with it.
+                if let above = block(onRow: row - 1) {
+                    lend(above, y: lineOrigin.y + cellDimension.height - pad)
+                }
+                if let below = block(onRow: row + 1) {
+                    lend(below, y: lineOrigin.y)
+                }
+                context.restoreGState()
+            }
 
             if !underTextImages.isEmpty {
                 let offsetScale = getImageScale()

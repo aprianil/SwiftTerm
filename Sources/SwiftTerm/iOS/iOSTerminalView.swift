@@ -352,6 +352,17 @@ open class TerminalView: UIScrollView, UITextInputTraits, UIKeyInput, UIScrollVi
             queuePendingDisplay()
         }
     }
+
+    /// How far, in points, a ruled block's fill and rule extend into a blank
+    /// row above or below it, so a block has air around its words without
+    /// a row of the program's being invented. Capped at one row. Zero, the
+    /// default, draws nothing beyond the block's own rows.
+    public var backgroundBlockPadding: CGFloat = 0 {
+        didSet {
+            terminal.updateFullScreen()
+            queuePendingDisplay()
+        }
+    }
     var transparent = TTColor.transparent ()
     private var lastLayoutBounds: CGRect = .zero
     
