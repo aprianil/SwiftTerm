@@ -331,6 +331,7 @@ open class TerminalView: NSView, NSTextInputClient, NSUserInterfaceValidations, 
     // of attributes for an NSAttributedString
     var attributes: [Attribute: [NSAttributedString.Key:Any]] = [:]
     var urlAttributes: [Attribute: [NSAttributedString.Key:Any]] = [:]
+    var hoveredUrlAttributes: [Attribute: [NSAttributedString.Key:Any]] = [:]
 
     /// Bare urls visible right now, per buffer row, so `.always` can highlight
     /// them at rest. Rebuilt only when a visible line's `generation` moves; see
@@ -1261,7 +1262,29 @@ open class TerminalView: NSView, NSTextInputClient, NSUserInterfaceValidations, 
         }
     }
 
+    /// Colour for the link under the pointer in `.always`. When nil, the
+    /// hovered link keeps `urlColor` and only its underline changes, dashed
+    /// to solid.
+    public var hoveredUrlColor: NSColor? {
+        didSet {
+            hoveredUrlAttributes.removeAll (keepingCapacity: true)
+            invalidateRowRenderCache()
+            terminal.updateFullScreen()
+            queuePendingDisplay()
+        }
+    }
+
     var linkHighlightRange: [Terminal.LinkMatch.RowRange]?
+
+    /// The cell the pointer was last over, so a move within one cell does not
+    /// rerun the link scan of its line.
+    var lastHoverPosition: Position?
+
+    /// The pointer over the terminal: the hand over a link it would open, the
+    /// I-beam everywhere else.
+    var hoverCursor: NSCursor {
+        linkHighlightRange == nil ? .iBeam : .pointingHand
+    }
 
     /**
      * If set to true, this will call the TerminalViewDelegate's rangeChanged method
@@ -1317,7 +1340,7 @@ open class TerminalView: NSView, NSTextInputClient, NSUserInterfaceValidations, 
     
     public override func cursorUpdate(with event: NSEvent)
     {
-        NSCursor.iBeam.set ()
+        hoverCursor.set ()
     }
     
     func makeFirstResponder ()
@@ -1485,7 +1508,7 @@ open class TerminalView: NSView, NSTextInputClient, NSUserInterfaceValidations, 
         if commandActive {
             return true
         }
-        if linkHighlightMode == .hover {
+        if linkHighlightMode == .hover || linkHighlightMode == .always {
             return true
         }
         if linkHighlightMode == .hoverWithModifier && commandActive {
@@ -1588,7 +1611,8 @@ open class TerminalView: NSView, NSTextInputClient, NSUserInterfaceValidations, 
     
     public override func mouseExited(with event: NSEvent) {
         turnOffUrlPreview()
-        if linkHighlightMode == .hover || linkHighlightMode == .hoverWithModifier {
+        lastHoverPosition = nil
+        if linkHighlightMode == .hover || linkHighlightMode == .hoverWithModifier || linkHighlightMode == .always {
             let oldRange = linkHighlightRange
             linkHighlightRange = nil
             invalidateLinkHighlight(oldRange: oldRange, newRange: nil)
@@ -3155,7 +3179,7 @@ open class TerminalView: NSView, NSTextInputClient, NSUserInterfaceValidations, 
 
     func updateHoverLink(at position: Position, commandOverride: Bool? = nil)
     {
-        let hoverModes: [LinkHighlightMode] = [.hover, .hoverWithModifier]
+        let hoverModes: [LinkHighlightMode] = [.hover, .hoverWithModifier, .always]
         guard hoverModes.contains(linkHighlightMode) else {
             if linkHighlightRange != nil {
                 let oldRange = linkHighlightRange
@@ -3175,6 +3199,12 @@ open class TerminalView: NSView, NSTextInputClient, NSUserInterfaceValidations, 
             }
             return
         }
+        // The scan behind `linkMatch` reads the whole wrapped line, and a
+        // pointer crossing one cell sends dozens of moves; one scan per cell.
+        if position == lastHoverPosition {
+            return
+        }
+        lastHoverPosition = position
         let match = terminal.linkMatch(at: .buffer(position), mode: .explicitAndImplicit)
         let newRange = match?.rowRanges
         if newRange != linkHighlightRange {
@@ -3182,6 +3212,9 @@ open class TerminalView: NSView, NSTextInputClient, NSUserInterfaceValidations, 
             linkHighlightRange = newRange
             invalidateLinkHighlight(oldRange: oldRange, newRange: newRange)
             queuePendingDisplay()
+            if (oldRange == nil) != (newRange == nil) {
+                hoverCursor.set ()
+            }
         }
     }
 

@@ -172,6 +172,17 @@ open class TerminalView: UIScrollView, UITextInputTraits, UIKeyInput, UIScrollVi
         }
     }
 
+    /// Colour for the link under the pointer in `.always`, see the macOS view.
+    /// Tracked there; declared here so the shared draw path compiles.
+    public var hoveredUrlColor: UIColor? {
+        didSet {
+            hoveredUrlAttributes.removeAll (keepingCapacity: true)
+            invalidateRowRenderCache()
+            terminal.updateFullScreen()
+            queuePendingDisplay()
+        }
+    }
+
     private var lastReportedLink: String?
     var commandActive = false
     private var activeCommandKeys: Set<UIKeyboardHIDUsage> = []
@@ -277,6 +288,7 @@ open class TerminalView: UIScrollView, UITextInputTraits, UIKeyInput, UIScrollVi
     // of attributes for an NSAttributedString
     var attributes: [Attribute: [NSAttributedString.Key:Any]] = [:]
     var urlAttributes: [Attribute: [NSAttributedString.Key:Any]] = [:]
+    var hoveredUrlAttributes: [Attribute: [NSAttributedString.Key:Any]] = [:]
 
     /// Bare urls visible right now, per buffer row, so `.always` can highlight
     /// them at rest. Rebuilt only when a visible line's `generation` moves; see

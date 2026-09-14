@@ -53,7 +53,10 @@ public enum LinkHighlightMode {
     case hover
     /// Underline only when hovering and the modifier key is pressed.
     case hoverWithModifier
-    /// Always underline explicit links.
+    /// Always underline links. The one under the pointer is drawn in
+    /// `hoveredUrlColor` with a solid underline, and the pointer becomes the
+    /// pointing hand over it, so a link reads as clickable before it is
+    /// pointed at and confirms it when it is.
     case always
     /// Underline explicit links only while the modifier is pressed.
     case alwaysWithModifier
@@ -920,10 +923,12 @@ extension TerminalView {
     //
     // Given a vt100 attribute, return the NSAttributedString attributes used to render it
     //
-    func getAttributes (_ attribute: Attribute, withUrl: Bool) -> [NSAttributedString.Key:Any]?
+    func getAttributes (_ attribute: Attribute, withUrl: Bool, hovered: Bool = false) -> [NSAttributedString.Key:Any]?
     {
-        if let result = withUrl ? urlAttributes [attribute] : attributes [attribute] {
-            return result
+        let cached = hovered ? hoveredUrlAttributes [attribute]
+            : withUrl ? urlAttributes [attribute] : attributes [attribute]
+        if let cached {
+            return cached
         }
 
         let flags = attribute.style
@@ -991,17 +996,29 @@ extension TerminalView {
             // embedder can give every link one colour rather than inheriting
             // whatever colour the program happened to print it in. Unset keeps
             // the historical behaviour: the cell's own foreground.
-            let linkColor = urlColor ?? fgColor
+            //
+            // The hovered link steps up once more: its own colour when the
+            // embedder set one, and a solid underline where the others are
+            // dashed, so the eye can tell the link the click would open from
+            // the ones around it.
+            let linkColor = (hovered ? hoveredUrlColor : nil) ?? urlColor ?? fgColor
             nsattr [.foregroundColor] = linkColor
             nsattr [.underlineStyle] = NSUnderlineStyle.single.rawValue
             nsattr [.underlineColor] = linkColor
-            nsattr [SwiftTermUnderlineStyleKey] = Int(UnderlineStyle.dashed.rawValue)
+            nsattr [SwiftTermUnderlineStyleKey] = Int((hovered ? UnderlineStyle.single : UnderlineStyle.dashed).rawValue)
 
             // Add to cache; truecolor attributes are unbounded, so cap it
-            if urlAttributes.count >= 4096 {
-                urlAttributes.removeAll(keepingCapacity: true)
+            if hovered {
+                if hoveredUrlAttributes.count >= 4096 {
+                    hoveredUrlAttributes.removeAll(keepingCapacity: true)
+                }
+                hoveredUrlAttributes [attribute] = nsattr
+            } else {
+                if urlAttributes.count >= 4096 {
+                    urlAttributes.removeAll(keepingCapacity: true)
+                }
+                urlAttributes [attribute] = nsattr
             }
-            urlAttributes [attribute] = nsattr
         } else {
             // Just add to cache; truecolor attributes are unbounded, so cap it
             if attributes.count >= 4096 {
@@ -1151,6 +1168,7 @@ extension TerminalView {
         var pendingAttrs: [NSAttributedString.Key: Any]? = nil
         var lastAttr: Attribute? = nil
         var lastHasUrl = false
+        var lastHovered = false
         var lastIsSelected = false
         var lastBlinkHidden = false
 
@@ -1178,7 +1196,8 @@ extension TerminalView {
             let width = max(1, Int(ch.width))
             let attr = ch.attribute
             let hasUrl = shouldUnderlineLink(row: row, column: col, width: width, cell: ch)
-            guard let attributes = getAttributes(attr, withUrl: hasUrl) else {
+            let hovered = hasUrl && isHoveredLink(row: row, column: col, width: width)
+            guard let attributes = getAttributes(attr, withUrl: hasUrl, hovered: hovered) else {
                 flushPending()
                 if let finished = builder?.buildIfNeeded() {
                     segments.append(finished)
@@ -1207,12 +1226,13 @@ extension TerminalView {
             // Flush batch when attributes change; the batch dictionary is only
             // rebuilt at these boundaries, so unchanged cells append without
             // copying it.
-            if attr != lastAttr || hasUrl != lastHasUrl || isSelected != lastIsSelected
+            if attr != lastAttr || hasUrl != lastHasUrl || hovered != lastHovered || isSelected != lastIsSelected
                 || blinkHidden != lastBlinkHidden
                 || pendingAttrs == nil {
                 flushPending()
                 lastAttr = attr
                 lastHasUrl = hasUrl
+                lastHovered = hovered
                 lastIsSelected = isSelected
                 lastBlinkHidden = blinkHidden
                 var batchAttributes = attributes
@@ -1406,6 +1426,21 @@ extension TerminalView {
         return implicitHighlightRanges(forRow: row).contains { $0.overlaps(cellRange) }
     }
 
+    /// In `.always`, the cells of the link under the pointer. The hover modes
+    /// fold the pointer into `shouldUnderlineLink` already, since there the
+    /// pointer is what makes a link a link; here every link is underlined and
+    /// the pointer picks one out.
+    func isHoveredLink(row: Int, column: Int, width: Int) -> Bool
+    {
+        guard linkHighlightMode == .always,
+              let highlights = linkHighlightRange,
+              let highlight = highlights.first(where: { $0.row == row })
+        else {
+            return false
+        }
+        return highlight.range.overlaps(column..<(column + width))
+    }
+
     func shouldUnderlineLink(row: Int, column: Int, width: Int, cell: CharData) -> Bool
     {
         switch linkHighlightMode {
@@ -1548,7 +1583,7 @@ extension TerminalView {
         // wholesale clear.
         let underliningImplicitLinks = linkHighlightMode == .always
             || (linkHighlightMode == .alwaysWithModifier && commandActive)
-        let underliningHover = linkHighlightMode == .hover
+        let underliningHover = linkHighlightMode == .hover || linkHighlightMode == .always
             || (linkHighlightMode == .hoverWithModifier && commandActive)
         let signature = RowRenderSignature(
             generation: line.generation,
