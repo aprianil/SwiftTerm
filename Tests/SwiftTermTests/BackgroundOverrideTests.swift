@@ -65,3 +65,63 @@ final class BackgroundOverrideTests: XCTestCase {
     }
 }
 #endif
+
+#if os(macOS)
+final class BackgroundRuleTests: XCTestCase {
+    private let grey = Attribute.Color.ansi256(code: 237)
+
+    private func makeView () -> TerminalView {
+        _ = NSApplication.shared
+        var options = TerminalOptions.default
+        options.cols = 40
+        options.rows = 4
+        let font = NSFont.monospacedSystemFont(ofSize: 13, weight: .regular)
+        let view = TerminalView(frame: NSRect(x: 0, y: 0, width: 400, height: 80),
+                                font: font, options: options)
+        view.nativeBackgroundColor = .black
+        view.feed(byteArray: ArraySlice(Array("\u{1b}[48;5;237m echoed words                    \u{1b}[49m\r\nplain row\r\n".utf8)))
+        return view
+    }
+
+    private func bitmap (of view: TerminalView) -> NSBitmapImageRep {
+        let rep = view.bitmapImageRepForCachingDisplay(in: view.bounds)!
+        view.cacheDisplay(in: view.bounds, to: rep)
+        return rep
+    }
+
+    func testTheRuleIsDrawnAtTheLeftOfTheNamedRowsOnly () {
+        let view = makeView()
+        let cell = view.cellDimension!
+        let before = bitmap(of: view)
+        view.backgroundRules = [grey: .red]
+        view.backgroundRuleWidth = 2
+        let after = bitmap(of: view)
+        let scale = CGFloat(after.pixelsWide) / view.bounds.width
+        // The block is row 0, at the top; the bitmap's origin is its top-left.
+        let ruleX = Int(1 * scale)
+        let ruleY = Int(cell.height * 0.5 * scale)
+        let plainY = Int(cell.height * 1.5 * scale)
+        let redAfter = after.colorAt(x: ruleX, y: ruleY)!
+        XCTAssertGreaterThan(redAfter.redComponent, 0.9, "the rule is red at the block's left edge")
+        XCTAssertLessThan(redAfter.greenComponent, 0.1)
+        let redBefore = before.colorAt(x: ruleX, y: ruleY)!
+        XCTAssertLessThan(redBefore.redComponent, 0.5, "and was not there before")
+        let plain = after.colorAt(x: ruleX, y: plainY)!
+        XCTAssertLessThan(plain.redComponent, 0.5, "a row without the background has no rule")
+        // Past the rule's width the fill is the block's own grey, not red.
+        let pastRule = after.colorAt(x: Int(cell.width * 0.8 * scale), y: ruleY)!
+        XCTAssertLessThan(pastRule.redComponent, 0.5)
+    }
+
+    func testTheRuleComposesWithTheOverride () {
+        let view = makeView()
+        view.backgroundColorOverrides = [grey: NSColor(white: 0, alpha: 0.5)]
+        view.backgroundRules = [grey: .red]
+        let cell = view.cellDimension!
+        let after = bitmap(of: view)
+        let scale = CGFloat(after.pixelsWide) / view.bounds.width
+        let rule = after.colorAt(x: Int(1 * scale), y: Int(cell.height * 0.5 * scale))!
+        XCTAssertGreaterThan(rule.redComponent, 0.9, "the rule keys on the colour the program named, not the one drawn")
+    }
+}
+#endif

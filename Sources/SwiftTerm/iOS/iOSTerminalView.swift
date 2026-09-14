@@ -329,6 +329,29 @@ open class TerminalView: UIScrollView, UITextInputTraits, UIKeyInput, UIScrollVi
             queuePendingDisplay()
         }
     }
+
+    /// A rule down the left edge of every row whose background the program
+    /// named in this colour, in the colour given. What a background alone
+    /// cannot do over a translucent ground: a fill is a step lighter or
+    /// darker than whatever the window shows through, and either one can
+    /// vanish against the wrong backdrop, where a line reads the same over
+    /// any. Keyed like `backgroundColorOverrides`, and drawn against the
+    /// colour that override resolves to, so the two compose. Empty by
+    /// default.
+    public var backgroundRules: [Attribute.Color: UIColor] = [:] {
+        didSet {
+            terminal.updateFullScreen()
+            queuePendingDisplay()
+        }
+    }
+
+    /// How wide that rule is, in points.
+    public var backgroundRuleWidth: CGFloat = 2 {
+        didSet {
+            terminal.updateFullScreen()
+            queuePendingDisplay()
+        }
+    }
     var transparent = TTColor.transparent ()
     private var lastLayoutBounds: CGRect = .zero
     

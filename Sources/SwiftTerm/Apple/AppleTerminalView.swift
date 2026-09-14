@@ -2064,6 +2064,12 @@ extension TerminalView {
         func calcLineOffset (forRow: Int) -> CGFloat {
             cellDimension.height * CGFloat (forRow-bufferOffset+1)
         }
+        // The rules, resolved once to the colour their runs will carry, so
+        // the fill loop can match a run's background by equality.
+        let rules: [(background: TTColor, rule: TTColor)] = backgroundRules.map {
+            (mapColor(color: $0.key, isFg: false, isBold: false), $0.value)
+        }
+        var ruledRow = Int.min
         // draw lines
         #if os(iOS) || os(visionOS)
         // On iOS, use contentOffset.y to determine the first visible row rather than
@@ -2287,6 +2293,16 @@ extension TerminalView {
 
                             context.setFillColor(cachedCGColor(backgroundColor))
                             context.fill(rect)
+
+                            // The rule down the block's left edge, once per
+                            // row, at the leftmost run that carries the
+                            // background: runs come in column order.
+                            if ruledRow != row, let rule = rules.first(where: { $0.background == backgroundColor }) {
+                                ruledRow = row
+                                context.setFillColor(cachedCGColor(rule.rule))
+                                context.fill(CGRect(x: rect.minX, y: rect.minY,
+                                                    width: backgroundRuleWidth, height: rect.height))
+                            }
                         }
                     }
                 }
