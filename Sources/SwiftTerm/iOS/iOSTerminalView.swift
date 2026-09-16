@@ -363,6 +363,20 @@ open class TerminalView: UIScrollView, UITextInputTraits, UIKeyInput, UIScrollVi
             queuePendingDisplay()
         }
     }
+
+    /// A glyph the program prints on a background it named in this colour,
+    /// left out of the draw: the cell stays, the column stays, only the mark
+    /// goes. For the prefix a program puts before a message it echoes back,
+    /// when the block's own edge already says whose it is; the same glyph on
+    /// any other background, a prompt say, is drawn as ever. Keyed like
+    /// `backgroundColorOverrides`. Empty by default.
+    public var backgroundHiddenGlyphs: [Attribute.Color: Set<Character>] = [:] {
+        didSet {
+            invalidateRowRenderCache()
+            terminal.updateFullScreen()
+            queuePendingDisplay()
+        }
+    }
     var transparent = TTColor.transparent ()
     private var lastLayoutBounds: CGRect = .zero
     

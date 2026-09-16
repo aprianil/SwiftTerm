@@ -1270,7 +1270,14 @@ extension TerminalView {
             }
             let currentAttributes = pendingAttrs!
 
-            let character: Character = displayOverride ?? (ch.code == 0 ? " " : terminal.getCharacter(for: ch))
+            var character: Character = displayOverride ?? (ch.code == 0 ? " " : terminal.getCharacter(for: ch))
+            // A glyph the embedder asked to lose on this background is drawn
+            // as its cell's blank: the run keeps its width and its fill, and
+            // the buffer keeps the glyph for selection and copy.
+            if !backgroundHiddenGlyphs.isEmpty,
+               let hidden = backgroundHiddenGlyphs[attr.bg], hidden.contains(character) {
+                character = " "
+            }
             let renderCodePoint = character.unicodeScalars.count == 1
                 ? character.unicodeScalars.first!.value : UInt32(ch.code)
 

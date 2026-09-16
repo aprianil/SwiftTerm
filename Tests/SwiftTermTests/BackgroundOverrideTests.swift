@@ -195,3 +195,92 @@ final class BackgroundBlockPaddingTests: XCTestCase {
     }
 }
 #endif
+
+#if os(macOS)
+final class BackgroundHiddenGlyphTests: XCTestCase {
+    private let grey = Attribute.Color.ansi256(code: 237)
+
+    /// Row 0 is the echoed block, with the prefix on the named background;
+    /// row 1 is a prompt with the same prefix on the default background.
+    private func makeView () -> TerminalView {
+        _ = NSApplication.shared
+        var options = TerminalOptions.default
+        options.cols = 40
+        options.rows = 4
+        let font = NSFont.monospacedSystemFont(ofSize: 13, weight: .regular)
+        let view = TerminalView(frame: NSRect(x: 0, y: 0, width: 400, height: 80),
+                                font: font, options: options)
+        view.nativeBackgroundColor = .black
+        view.feed(byteArray: ArraySlice(Array("\u{1b}[48;5;237m\u{276f} echoed words \u{1b}[49m\r\n\u{276f} prompt\r\n".utf8)))
+        return view
+    }
+
+    private func drawnText (of view: TerminalView, row: Int) -> String {
+        view.buildAttributedString(row: row, line: view.terminal.buffer.lines[row], cols: 40)
+            .segments.map { $0.attributedString.string }.joined()
+    }
+
+    private func bitmap (of view: TerminalView) -> NSBitmapImageRep {
+        let rep = view.bitmapImageRepForCachingDisplay(in: view.bounds)!
+        view.cacheDisplay(in: view.bounds, to: rep)
+        return rep
+    }
+
+    /// Every pixel of one cell, as colours, so a cell with no ink in it can
+    /// be told from one with a glyph: the former is one colour throughout.
+    private func cellIsOneColour (_ rep: NSBitmapImageRep, view: TerminalView, row: Int, col: Int) -> Bool {
+        let cell = view.cellDimension!
+        let scale = CGFloat(rep.pixelsWide) / view.bounds.width
+        let x0 = Int(CGFloat(col) * cell.width * scale) + 1
+        let y0 = Int(CGFloat(row) * cell.height * scale) + 1
+        let x1 = Int(CGFloat(col + 1) * cell.width * scale) - 1
+        let y1 = Int(CGFloat(row + 1) * cell.height * scale) - 1
+        guard let first = rep.colorAt(x: x0, y: y0) else { return false }
+        for y in stride(from: y0, to: y1, by: 1) {
+            for x in stride(from: x0, to: x1, by: 1) {
+                guard let c = rep.colorAt(x: x, y: y) else { return false }
+                if abs(c.redComponent - first.redComponent) > 0.02
+                    || abs(c.greenComponent - first.greenComponent) > 0.02
+                    || abs(c.blueComponent - first.blueComponent) > 0.02 {
+                    return false
+                }
+            }
+        }
+        return true
+    }
+
+    func testTheGlyphIsDrawnAsABlankOnTheNamedBackgroundOnly () {
+        let view = makeView()
+        XCTAssertTrue(drawnText(of: view, row: 0).hasPrefix("\u{276f} echoed"), "drawn as printed until asked")
+
+        view.backgroundHiddenGlyphs = [grey: ["\u{276f}"]]
+        XCTAssertTrue(drawnText(of: view, row: 0).hasPrefix("  echoed"),
+                      "on the named background the prefix is a blank, and the column is kept")
+        XCTAssertTrue(drawnText(of: view, row: 1).hasPrefix("\u{276f} prompt"),
+                      "on the default background the same glyph is drawn as ever")
+        XCTAssertEqual(view.terminal.buffer.lines[0][0].code, 0x276f,
+                       "the buffer keeps the glyph; only the draw loses it")
+
+        view.backgroundHiddenGlyphs = [:]
+        XCTAssertTrue(drawnText(of: view, row: 0).hasPrefix("\u{276f} echoed"), "clearing it draws what was there")
+    }
+
+    func testTheBlankReachesThePixelsAndTheFillStays () {
+        let view = makeView()
+        let before = bitmap(of: view)
+        XCTAssertFalse(cellIsOneColour(before, view: view, row: 0, col: 0), "the prefix has ink before")
+
+        view.backgroundHiddenGlyphs = [grey: ["\u{276f}"]]
+        let after = bitmap(of: view)
+        XCTAssertTrue(cellIsOneColour(after, view: view, row: 0, col: 0), "and none after")
+        XCTAssertFalse(cellIsOneColour(after, view: view, row: 1, col: 0), "the prompt's is untouched")
+
+        // The cell is still the block's grey, not the window's black: the
+        // fill is the run's, and the run is still there.
+        let cell = view.cellDimension!
+        let scale = CGFloat(after.pixelsWide) / view.bounds.width
+        let fill = after.colorAt(x: Int(cell.width * 0.5 * scale), y: Int(cell.height * 0.5 * scale))!
+        XCTAssertGreaterThan(fill.redComponent, 0.1, "the named background is still drawn under the blank")
+    }
+}
+#endif
