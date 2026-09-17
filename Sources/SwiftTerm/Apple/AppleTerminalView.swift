@@ -2845,14 +2845,13 @@ extension TerminalView {
         let buffer = terminal.displayBuffer
         let vy = buffer.yBase + buffer.y
         
+        // Hidden in place, never removed: see `showCursor` on the Mac view
+        // for why the caret's membership in the tree must not change.
         if vy >= buffer.yDisp + buffer.rows {
-            caretView.removeFromSuperview()
+            caretView.isHidden = true
             return
-        } else if terminal.cursorHidden == false && caretView.superview != self {
-            addSubview(caretView)
-        } else if terminal.cursorHidden == true && caretView.superview == self {
-            caretView.removeFromSuperview()
         }
+        caretView.isHidden = terminal.cursorHidden
         let doublePosition = buffer.lines [vy].renderMode == .single ? 1.0 : 2.0
         #if os(iOS) || os(visionOS)
         let offset = (cellDimension.height * (CGFloat(buffer.y+(buffer.yBase))))

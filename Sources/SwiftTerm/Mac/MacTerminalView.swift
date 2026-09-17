@@ -591,7 +591,7 @@ open class TerminalView: NSView, NSTextInputClient, NSUserInterfaceValidations, 
             metalBoundWindow = nil
             layer?.backgroundColor = effectiveNativeBackgroundColor.cgColor
             if let caretView = caretView {
-                caretView.isHidden = false
+                caretView.isHidden = terminal.cursorHidden
                 caretView.updateCursorStyle()
             }
             needsDisplay = true
@@ -728,7 +728,7 @@ open class TerminalView: NSView, NSTextInputClient, NSUserInterfaceValidations, 
         metalBoundWindow = nil
         useMetalRenderer = false
         if let caretView = caretView {
-            caretView.isHidden = false
+            caretView.isHidden = terminal.cursorHidden
             caretView.updateCursorStyle()
         }
         needsDisplay = true
@@ -3491,20 +3491,27 @@ open class TerminalView: NSView, NSTextInputClient, NSUserInterfaceValidations, 
         return stripe
     }
     
+    // The caret hides and shows in place; it never leaves the tree. Adding
+    // or removing a subview invalidates the window's cursor rects (this view
+    // keeps one, for the I-beam), and AppKit then rebuilds them and, with
+    // the pointer inside the window, posts a cursor-update event: a
+    // WindowServer round trip to find the window under the pointer, a hit
+    // test down the hierarchy, and `NSCursor.set`, 20 to 35 ms together on
+    // a busy machine. A full-screen program hides the cursor before every
+    // repaint and shows it after, so that was paid per output chunk while
+    // the pointer rested on the terminal. `isHidden` invalidates nothing
+    // (measured on macOS 15: only add and remove do). `CaretChurnTests`
+    // hold it.
     open func showCursor(source: Terminal) {
         if useMetalRenderer {
             queueMetalDisplay()
             return
         }
-        if caretView.superview == nil {
-            addSubview(caretView)
-            // A layer that leaves the tree loses its animations, so the
-            // blink died with the first hide and never came back: a program
-            // that hides the cursor while it redraws (every full-screen one
-            // does) left the caret steady for good. Re-armed on every show,
-            // which also means a caret shown at the end of each frame of a
-            // busy redraw stays lit until the program goes quiet, and only
-            // then blinks.
+        if caretView.isHidden {
+            caretView.isHidden = false
+            // Re-armed on every show, so a caret shown at the end of each
+            // frame of a busy redraw stays lit until the program goes quiet,
+            // and only then blinks.
             caretView.updateCursorStyle()
         }
     }
@@ -3514,7 +3521,7 @@ open class TerminalView: NSView, NSTextInputClient, NSUserInterfaceValidations, 
             queueMetalDisplay()
             return
         }
-        caretView.removeFromSuperview()
+        caretView.isHidden = true
     }
     
     open func cursorStyleChanged (source: Terminal, newStyle: CursorStyle) {
