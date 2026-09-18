@@ -7416,6 +7416,15 @@ open class Terminal {
         let read: [BufferLine]
         /// Where `read[0]` sits relative to the anchor row.
         let firstReadOffset: Int
+        /// Whether the walk wanted a row that did not exist yet, above or
+        /// below the buffer. A group that ends on the LAST line has looked at
+        /// the row under it and found nothing there, and that answer stops
+        /// being true the moment a line is appended: without this the entry
+        /// reads fresh forever and the link never joins its continuation
+        /// (reviewed 2026-09-18, and the test is
+        /// `testAGroupAtTheBottomJoinsTheRowThatArrivesUnderIt`).
+        let clippedAbove: Bool
+        let clippedBelow: Bool
         let generations: [UInt64]
         let recycleGenerations: [UInt64]
         let hits: [Hit]
@@ -7478,6 +7487,12 @@ open class Terminal {
     {
         let top = anchor + scan.firstReadOffset
         guard top >= 0, top + scan.read.count <= buffer.lines.count else { return false }
+        // A row the walk was denied and can now have. The group under a link
+        // at the bottom of the buffer is the case this exists for: it read
+        // nothing under the last line because there was nothing, and one line
+        // of output later there is.
+        if scan.clippedBelow && top + scan.read.count < buffer.lines.count { return false }
+        if scan.clippedAbove && top > 0 { return false }
         for index in 0..<scan.read.count {
             let line = buffer.lines[top + index]
             guard line === scan.read[index],
@@ -7498,6 +7513,10 @@ open class Terminal {
         func finish() -> ImplicitGroupScan {
             let top = max(0, examined.lowerBound)
             let bottom = min(examined.upperBound, buffer.lines.count - 1)
+            // `examined` comes back unclamped on purpose: the rows it names
+            // past either end are rows this scan asked for and did not get.
+            let clippedAbove = examined.lowerBound < 0
+            let clippedBelow = examined.upperBound > buffer.lines.count - 1
             var read: [BufferLine] = []
             var generations: [UInt64] = []
             var recycles: [UInt64] = []
@@ -7512,6 +7531,8 @@ open class Terminal {
             }
             return ImplicitGroupScan(read: read,
                                      firstReadOffset: top - row,
+                                     clippedAbove: clippedAbove,
+                                     clippedBelow: clippedBelow,
                                      generations: generations,
                                      recycleGenerations: recycles,
                                      hits: hits,
@@ -7812,7 +7833,10 @@ open class Terminal {
     /// past and rejected included, which is what a cache of the result has to
     /// watch. The walks below read one row beyond each end of the group before
     /// they stop (the wrap flag or the seam that refused), and a change there
-    /// would grow the group next time.
+    /// would grow the group next time. It is NOT clamped to the buffer: a row
+    /// named past either end is a row this asked for and did not get, and a
+    /// cache has to know the difference between "read it, it did not join" and
+    /// "there was nothing there yet".
     private func buildGhosttyImplicitLineMap(at position: Position, in buffer: Buffer,
                                              examined: inout ClosedRange<Int>) -> GhosttyImplicitLineMap?
     {
@@ -7847,7 +7871,10 @@ open class Terminal {
             startRow = heuristicStart
             endRow = heuristicEnd
         }
-        examined = max(0, startRow - 1)...min(buffer.lines.count - 1, endRow + 1)
+        // Unclamped: a caller that caches this has to be able to tell a row it
+        // read and rejected from a row that was not there to read. The clamp
+        // belongs to whoever records the lines, not to the window itself.
+        examined = (startRow - 1)...(endRow + 1)
 
         var text = ""
         var cells: [GhosttyImplicitCellRef] = []

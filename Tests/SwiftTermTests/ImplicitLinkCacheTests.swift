@@ -159,6 +159,35 @@ final class ImplicitLinkCacheTests: XCTestCase {
         XCTAssertTrue(terminal.implicitLinkRanges(startRow: top, endRow: top + terminal.rows - 1).isEmpty)
     }
 
+    /// **The bottom of the buffer, where the row below does not exist yet.**
+    ///
+    /// A url broken by the program rather than by the terminal ends a row
+    /// within a few cells of the right edge and on a character a url can
+    /// continue with, and the row under it carries the rest. The group walk
+    /// looks for that row. On the screen's LAST row there is nothing to look
+    /// at, and the answer is "this link is one row long"; one line of output
+    /// later the screen has scrolled, the continuation is there, and nothing
+    /// about the row itself has changed to say so. The line the cache has to
+    /// watch is the one that was not there. Found in review, 2026-09-18.
+    ///
+    /// The filler is what puts the url on the last line: a buffer always holds
+    /// a whole screen, so a url typed into the middle of one has blank rows
+    /// under it that the walk reads and remembers, and a cache that only
+    /// watches the rows it read is right about that case by luck.
+    func testAGroupAtTheBottomJoinsTheRowThatArrivesUnderIt() {
+        // 47 columns of 48, so the terminal does not wrap it, ending past the
+        // continuation threshold (cols - cols / 5 = 39) on a character a url
+        // can go on with.
+        let upper = "see https://apple.com/documentation/appkit/nsv-"
+        XCTAssertEqual(upper.count, 47, "one column short of the width, or the terminal wraps it")
+        var steps: [String] = [String(repeating: "a line of output\r\n", count: Self.rows - 1) + upper]
+        // The continuation, one line of output later: the newline scrolls the
+        // screen, which is what makes a row under the url exist at all.
+        steps.append("\r\nhittest and then some words")
+        steps.append(rewrite(Self.rows - 1, "and the continuation rewritten away"))
+        assertTheCacheIsInvisible(steps, "bottom seam")
+    }
+
     /// A resize rewrites what a row is, so everything measured at the old width
     /// has to go.
     func testAResizeThrowsTheCacheAway() {
