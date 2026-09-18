@@ -7348,6 +7348,14 @@ open class Terminal {
         )
     }
 
+    /// What the last scan learned, by the line that anchored it. See
+    /// `ImplicitGroupScan`; `implicitGroupCacheCols` is what makes a resize
+    /// throw it away, and the tick is what keeps it the size of the screens
+    /// being drawn.
+    private var implicitGroupCache: [ObjectIdentifier: ImplicitGroupScan] = [:]
+    private var implicitGroupCacheCols = -1
+    private var implicitScanTick: UInt64 = 0
+
     /// Every implicit link on the given buffer rows, as the column range each
     /// one occupies on each row it crosses.
     ///
@@ -7359,75 +7367,222 @@ open class Terminal {
     ///
     /// One pass, not one per row: a group is scanned once and the walk resumes
     /// past its last row, so a wrapped url costs the same as an unwrapped one.
+    ///
+    /// **And one pass per CHANGED group, not per screen.** The walk below is
+    /// the same walk it always was; what is new is that each row's outcome is
+    /// remembered against the lines it was read from (`implicitGroupCache`), so
+    /// a screen where one row changed re-runs the regex for the groups that row
+    /// belongs to and compares pointers for the rest. A program that repaints a
+    /// row ten times a second used to pay a whole-screen rescan each time, and
+    /// on a screen full of colons and paths (a coding agent's output is nothing
+    /// else) that was 20 to 30 ms of regex per draw.
     public func implicitLinkRanges(startRow: Int, endRow: Int) -> [Int: [Range<Int>]]
     {
-        guard let regex = Self.ghosttyImplicitLinkRegex else {
+        guard Self.ghosttyImplicitLinkRegex != nil else {
             return [:]
         }
         let buffer = displayBuffer
         var out: [Int: [Range<Int>]] = [:]
         var row = max(0, startRow)
         let last = min(endRow, buffer.lines.count - 1)
+        beginImplicitScan()
 
         while row <= last {
-            let line = buffer.lines[row]
-            let rawLimit = min(cols, line.count)
-            let lineLimit = min(rawLimit, line.getTrimmedLength())
-            guard lineLimit > 0 else { row += 1; continue }
-            // Anchor on the first thing that is not whitespace: the line map
-            // refuses a position that lands in a row's indent.
-            let anchor = firstNonWhitespaceColumn(in: line, lineLimit: lineLimit)
-            // Every scheme this regex knows contains a colon, so a row without
-            // one cannot begin a link. Checking that is a walk over 48 cells;
-            // not checking it means running a backtracking-prone regex over
-            // every row of every screen, most of which hold no links at all.
-            // Measured on real claude screens at the panel's geometry: a full
-            // scan of the slash-command menu went from 2.25ms to well under the
-            // frame budget, and that screen contains no links whatsoever.
-            //
-            // Safe against wrapped links: a url carries its scheme, and so its
-            // colon, on whichever row the match begins, and every row is
-            // considered in turn. That row anchors a group whose walk reaches
-            // backward and forward over the rest of the link.
-            guard anchor < lineLimit,
-                  rowCouldBeginImplicitLink(line: line, from: anchor, to: lineLimit),
-                  let lineMap = buildGhosttyImplicitLineMap(at: Position(col: anchor, row: row), in: buffer)
-            else { row += 1; continue }
+            let scan = implicitGroupScan(at: row, in: buffer)
+            for hit in scan.hits {
+                out[row + hit.rowOffset, default: []].append(hit.range)
+            }
+            row += max(1, scan.advance)
+        }
+        endImplicitScan()
+        return out
+    }
 
-            let searchRange = NSRange(lineMap.text.startIndex..<lineMap.text.endIndex, in: lineMap.text)
-            for match in regex.matches(in: lineMap.text, options: [], range: searchRange) {
-                guard match.range.length > 0,
-                      let textRange = Range(match.range, in: lineMap.text)
-                else { continue }
-                if suppressGhosttyLikeMatch(textRange, in: lineMap.text) { continue }
+    /// What one row's turn in that walk produced, and what it read to produce
+    /// it. Rows are kept as offsets from the row that anchored the scan, so an
+    /// entry survives the whole screen sliding up: a trim at the scrollback cap
+    /// moves every line to a new index without changing a single one of them,
+    /// and a cache that spoke in absolute rows would throw itself away on every
+    /// line of a long session.
+    private struct ImplicitGroupScan {
+        struct Hit {
+            let rowOffset: Int
+            let range: Range<Int>
+        }
+        /// The lines this scan read, top to bottom, held so a later visit can
+        /// prove it is looking at the same screen. Holding them also keeps the
+        /// key sound: a line that is still referenced cannot be freed and have
+        /// its address handed to a different line.
+        let read: [BufferLine]
+        /// Where `read[0]` sits relative to the anchor row.
+        let firstReadOffset: Int
+        let generations: [UInt64]
+        let recycleGenerations: [UInt64]
+        let hits: [Hit]
+        /// How many rows the walk moves on by. Never less than one.
+        let advance: Int
+        var usedAt: UInt64
+    }
 
-                let startOffset = lineMap.text.distance(from: lineMap.text.startIndex, to: textRange.lowerBound)
-                let rawEnd = lineMap.text.distance(from: lineMap.text.startIndex, to: textRange.upperBound)
-                let endOffset = min(rawEnd, lineMap.cells.count)
-                guard startOffset < endOffset else { continue }
+    private var implicitGroupCacheIsValid: Bool {
+        implicitGroupCacheCols == cols
+    }
 
-                var bounds: [Int: (start: Int, end: Int)] = [:]
-                for idx in startOffset..<endOffset {
-                    let cell = lineMap.cells[idx]
-                    let cellEnd = cell.col + max(1, cell.width)
-                    if var existing = bounds[cell.row] {
-                        existing.start = min(existing.start, cell.col)
-                        existing.end = max(existing.end, cellEnd)
-                        bounds[cell.row] = existing
-                    } else {
-                        bounds[cell.row] = (start: cell.col, end: cellEnd)
-                    }
-                }
-                for (matchedRow, b) in bounds where b.start < b.end {
-                    out[matchedRow, default: []].append(b.start..<b.end)
+    private func beginImplicitScan()
+    {
+        if !implicitGroupCacheIsValid {
+            // A resize rewrites what a row even is, so nothing measured at the
+            // old width describes the new one.
+            implicitGroupCache.removeAll(keepingCapacity: true)
+            implicitGroupCacheCols = cols
+        }
+        implicitScanTick &+= 1
+    }
+
+    /// Keep the cache the size of the screens actually being looked at. An
+    /// entry that has not been wanted for two scans belongs to a screen nobody
+    /// is drawing any more.
+    private func endImplicitScan()
+    {
+        guard implicitGroupCache.count > Self.implicitGroupCacheLimit else { return }
+        let tick = implicitScanTick
+        implicitGroupCache = implicitGroupCache.filter { $0.value.usedAt &+ 1 >= tick }
+    }
+
+    /// Roughly four screens of anchors at any plausible geometry. The cost of
+    /// being wrong is one rescan of the group, not a wrong answer.
+    private static let implicitGroupCacheLimit = 512
+
+    /// The cached outcome for `row`, or a fresh scan if anything it was read
+    /// from has changed since.
+    private func implicitGroupScan(at row: Int, in buffer: Buffer) -> ImplicitGroupScan
+    {
+        let anchorLine = buffer.lines[row]
+        let key = ObjectIdentifier(anchorLine)
+        if var cached = implicitGroupCache[key], isFresh(cached, anchor: row, in: buffer) {
+            cached.usedAt = implicitScanTick
+            implicitGroupCache[key] = cached
+            return cached
+        }
+        let scanned = scanImplicitGroup(at: row, in: buffer)
+        implicitGroupCache[key] = scanned
+        return scanned
+    }
+
+    /// Whether every line the scan read is still the same object, still holding
+    /// the same content. `generation` catches a rewrite in place, and
+    /// `recycleGeneration` catches the other one: `CircularList.recycle` keeps
+    /// the object and gives it to a new row, so identity alone would say a line
+    /// that has become something else is unchanged.
+    private func isFresh(_ scan: ImplicitGroupScan, anchor: Int, in buffer: Buffer) -> Bool
+    {
+        let top = anchor + scan.firstReadOffset
+        guard top >= 0, top + scan.read.count <= buffer.lines.count else { return false }
+        for index in 0..<scan.read.count {
+            let line = buffer.lines[top + index]
+            guard line === scan.read[index],
+                  line.generation == scan.generations[index],
+                  line.recycleGeneration == scan.recycleGenerations[index]
+            else { return false }
+        }
+        return true
+    }
+
+    /// One row's turn in the walk, done for real.
+    private func scanImplicitGroup(at row: Int, in buffer: Buffer) -> ImplicitGroupScan
+    {
+        var examined = row...row
+        var hits: [ImplicitGroupScan.Hit] = []
+        var advance = 1
+
+        func finish() -> ImplicitGroupScan {
+            let top = max(0, examined.lowerBound)
+            let bottom = min(examined.upperBound, buffer.lines.count - 1)
+            var read: [BufferLine] = []
+            var generations: [UInt64] = []
+            var recycles: [UInt64] = []
+            if top <= bottom {
+                read.reserveCapacity(bottom - top + 1)
+                for index in top...bottom {
+                    let line = buffer.lines[index]
+                    read.append(line)
+                    generations.append(line.generation)
+                    recycles.append(line.recycleGeneration)
                 }
             }
-
-            var groupEnd = row
-            for cell in lineMap.cells { groupEnd = max(groupEnd, cell.row) }
-            row = max(row + 1, groupEnd + 1)
+            return ImplicitGroupScan(read: read,
+                                     firstReadOffset: top - row,
+                                     generations: generations,
+                                     recycleGenerations: recycles,
+                                     hits: hits,
+                                     advance: advance,
+                                     usedAt: implicitScanTick)
         }
-        return out
+
+        guard let regex = Self.ghosttyImplicitLinkRegex else { return finish() }
+        let line = buffer.lines[row]
+        let rawLimit = min(cols, line.count)
+        let lineLimit = min(rawLimit, line.getTrimmedLength())
+        guard lineLimit > 0 else { return finish() }
+        // Anchor on the first thing that is not whitespace: the line map
+        // refuses a position that lands in a row's indent.
+        let anchor = firstNonWhitespaceColumn(in: line, lineLimit: lineLimit)
+        // Every scheme this regex knows contains a colon, so a row without
+        // one cannot begin a link. Checking that is a walk over 48 cells;
+        // not checking it means running a backtracking-prone regex over
+        // every row of every screen, most of which hold no links at all.
+        // Measured on real claude screens at the panel's geometry: a full
+        // scan of the slash-command menu went from 2.25ms to well under the
+        // frame budget, and that screen contains no links whatsoever.
+        //
+        // Safe against wrapped links: a url carries its scheme, and so its
+        // colon, on whichever row the match begins, and every row is
+        // considered in turn. That row anchors a group whose walk reaches
+        // backward and forward over the rest of the link.
+        guard anchor < lineLimit,
+              rowCouldBeginImplicitLink(line: line, from: anchor, to: lineLimit),
+              let lineMap = buildGhosttyImplicitLineMap(at: Position(col: anchor, row: row),
+                                                        in: buffer,
+                                                        examined: &examined)
+        else { return finish() }
+
+        let searchRange = NSRange(lineMap.text.startIndex..<lineMap.text.endIndex, in: lineMap.text)
+        for match in regex.matches(in: lineMap.text, options: [], range: searchRange) {
+            guard match.range.length > 0,
+                  let textRange = Range(match.range, in: lineMap.text)
+            else { continue }
+            if suppressGhosttyLikeMatch(textRange, in: lineMap.text) { continue }
+
+            let startOffset = lineMap.text.distance(from: lineMap.text.startIndex, to: textRange.lowerBound)
+            let rawEnd = lineMap.text.distance(from: lineMap.text.startIndex, to: textRange.upperBound)
+            let endOffset = min(rawEnd, lineMap.cells.count)
+            guard startOffset < endOffset else { continue }
+
+            var bounds: [Int: (start: Int, end: Int)] = [:]
+            for idx in startOffset..<endOffset {
+                let cell = lineMap.cells[idx]
+                let cellEnd = cell.col + max(1, cell.width)
+                if var existing = bounds[cell.row] {
+                    existing.start = min(existing.start, cell.col)
+                    existing.end = max(existing.end, cellEnd)
+                    bounds[cell.row] = existing
+                } else {
+                    bounds[cell.row] = (start: cell.col, end: cellEnd)
+                }
+            }
+            // Sorted, because the dictionary above has no order of its own and
+            // a cached scan has to replay in the order the first one appended.
+            for matchedRow in bounds.keys.sorted() {
+                guard let b = bounds[matchedRow], b.start < b.end else { continue }
+                hits.append(ImplicitGroupScan.Hit(rowOffset: matchedRow - row,
+                                                  range: b.start..<b.end))
+            }
+        }
+
+        var groupEnd = row
+        for cell in lineMap.cells { groupEnd = max(groupEnd, cell.row) }
+        advance = max(1, groupEnd + 1 - row)
+        return finish()
     }
 
     private func rowCouldBeginImplicitLink(line: BufferLine, from: Int, to: Int) -> Bool
@@ -7649,11 +7804,24 @@ open class Terminal {
 
     private func buildGhosttyImplicitLineMap(at position: Position, in buffer: Buffer) -> GhosttyImplicitLineMap?
     {
+        var ignored = position.row...position.row
+        return buildGhosttyImplicitLineMap(at: position, in: buffer, examined: &ignored)
+    }
+
+    /// `examined` comes back as every row this looked at, the rows it walked
+    /// past and rejected included, which is what a cache of the result has to
+    /// watch. The walks below read one row beyond each end of the group before
+    /// they stop (the wrap flag or the seam that refused), and a change there
+    /// would grow the group next time.
+    private func buildGhosttyImplicitLineMap(at position: Position, in buffer: Buffer,
+                                             examined: inout ClosedRange<Int>) -> GhosttyImplicitLineMap?
+    {
         guard position.row >= 0 && position.row < buffer.lines.count else {
             return nil
         }
 
         let targetRow = position.row
+        examined = targetRow...targetRow
         let targetLine = buffer.lines[targetRow]
         let targetRawLimit = min(cols, targetLine.count)
         guard targetRawLimit > 0 else {
@@ -7679,6 +7847,7 @@ open class Terminal {
             startRow = heuristicStart
             endRow = heuristicEnd
         }
+        examined = max(0, startRow - 1)...min(buffer.lines.count - 1, endRow + 1)
 
         var text = ""
         var cells: [GhosttyImplicitCellRef] = []
