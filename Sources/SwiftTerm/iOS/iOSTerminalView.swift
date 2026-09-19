@@ -364,6 +364,17 @@ open class TerminalView: UIScrollView, UITextInputTraits, UIKeyInput, UIScrollVi
         }
     }
 
+    /// The radius, in points, of the selection wash's outer corners: those
+    /// the selection does not continue past on the row above or below, so a
+    /// paragraph's wash is one rounded shape and a word's is a pill. Zero,
+    /// the default, is the square wash.
+    public var selectionCornerRadius: CGFloat = 0 {
+        didSet {
+            terminal.updateFullScreen()
+            queuePendingDisplay()
+        }
+    }
+
     /// A glyph the program prints on a background it named in this colour,
     /// left out of the draw: the cell stays, the column stays, only the mark
     /// goes. For the prefix a program puts before a message it echoes back,

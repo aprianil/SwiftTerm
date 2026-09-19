@@ -111,6 +111,8 @@ struct PreparedRun {
     let run: CTRun
     let font: TTFont?
     let foregroundColor: TTColor?
+    /// The run's own background; the selection's wash is drawn over it
+    /// separately, in the selection's shape (see `selectionPath`).
     let backgroundColor: TTColor?
     /// True when the run carries underline or strikethrough attributes.
     let hasDecorations: Bool
@@ -1798,6 +1800,47 @@ extension TerminalView {
         return lowerBound..<upperBound
     }
     
+    /// The wash's outline on one row, in the row's rectangle (y up, the
+    /// top edge toward the row above): each outer corner is rounded by
+    /// `selectionCornerRadius` unless the selection on the neighbouring row
+    /// reaches it, in which case the edge runs straight on into that row.
+    /// A corner is reached when the neighbour's columns start at or before
+    /// it and end at or after it; a neighbour that ends where this row
+    /// starts, or starts where it ends, leaves the corner free.
+    func selectionPath (_ rect: CGRect, columns: Range<Int>, above: Range<Int>?, below: Range<Int>?) -> CGPath {
+        let radius = min(selectionCornerRadius, rect.height / 2, rect.width / 2)
+        func reachesLeft (_ neighbour: Range<Int>?) -> Bool {
+            guard let neighbour else { return false }
+            return neighbour.lowerBound <= columns.lowerBound && neighbour.upperBound > columns.lowerBound
+        }
+        func reachesRight (_ neighbour: Range<Int>?) -> Bool {
+            guard let neighbour else { return false }
+            return neighbour.lowerBound < columns.upperBound && neighbour.upperBound >= columns.upperBound
+        }
+        let topLeft = reachesLeft(above) ? 0 : radius
+        let topRight = reachesRight(above) ? 0 : radius
+        let bottomLeft = reachesLeft(below) ? 0 : radius
+        let bottomRight = reachesRight(below) ? 0 : radius
+
+        let path = CGMutablePath()
+        // Round the rectangle clockwise from the bottom left, each corner
+        // by its own radius; a corner of radius 0 is the plain corner.
+        func corner (_ point: CGPoint, then next: CGPoint, radius: CGFloat) {
+            if radius > 0 {
+                path.addArc(tangent1End: point, tangent2End: next, radius: radius)
+            } else {
+                path.addLine(to: point)
+            }
+        }
+        path.move(to: CGPoint(x: rect.minX, y: rect.minY + bottomLeft))
+        corner(CGPoint(x: rect.minX, y: rect.maxY), then: CGPoint(x: rect.maxX, y: rect.maxY), radius: topLeft)
+        corner(CGPoint(x: rect.maxX, y: rect.maxY), then: CGPoint(x: rect.maxX, y: rect.minY), radius: topRight)
+        corner(CGPoint(x: rect.maxX, y: rect.minY), then: CGPoint(x: rect.minX, y: rect.minY), radius: bottomRight)
+        corner(CGPoint(x: rect.minX, y: rect.minY), then: CGPoint(x: rect.minX, y: rect.maxY), radius: bottomLeft)
+        path.closeSubpath()
+        return path
+    }
+
     func isColumnSelected(_ selectionRange: Range<Int>?, column: Int, width: Int) -> Bool {
         guard let selectionRange else {
             return false
@@ -2254,13 +2297,11 @@ extension TerminalView {
                     let runs = ctRuns.map { run -> PreparedRun in
                         // Toll-free cast: no per-entry bridging.
                         let attrs = CTRunGetAttributes(run) as NSDictionary
-                        let selectionBackground = attrs.object(forKey: selectionBackgroundKeyNS) as? TTColor
                         return PreparedRun(
                             run: run,
                             font: attrs.object(forKey: fontKeyNS) as? TTFont,
                             foregroundColor: attrs.object(forKey: foregroundKeyNS) as? TTColor,
-                            backgroundColor: selectionBackground
-                                ?? attrs.object(forKey: backgroundKeyNS) as? TTColor,
+                            backgroundColor: attrs.object(forKey: backgroundKeyNS) as? TTColor,
                             hasDecorations: attrs.object(forKey: underlineStyleKeyNS) != nil
                                 || attrs.object(forKey: strikethroughStyleKeyNS) != nil,
                             attributes: attrs)
@@ -2348,6 +2389,29 @@ extension TerminalView {
             }
 
             context.restoreGState()
+
+            // The selection's wash, once per row rather than run by run,
+            // over whatever the runs filled: a block behind a message keeps
+            // its fill under a selection instead of trading it for the
+            // wash. Drawn in the selection's shape, its outer corners
+            // rounded by `selectionCornerRadius` where nothing of the
+            // selection continues past them on the row above or below, so a
+            // paragraph's wash is one rounded shape and a word's is a pill,
+            // and neither is a hard cut through the text.
+            if let selected = selectedColumnsRange(row: row, cols: displayBuffer.cols) {
+                let rect = CGRect(x: lineOrigin.x + CGFloat(selected.lowerBound) * cellDimension.width,
+                                  y: lineOrigin.y,
+                                  width: CGFloat(selected.count) * cellDimension.width,
+                                  height: cellDimension.height)
+                context.saveGState()
+                context.setShouldAntialias(selectionCornerRadius > 0)
+                context.setFillColor(cachedCGColor(selectedTextBackgroundColor))
+                context.addPath(selectionPath(rect, columns: selected,
+                                              above: selectedColumnsRange(row: row - 1, cols: displayBuffer.cols),
+                                              below: selectedColumnsRange(row: row + 1, cols: displayBuffer.cols)))
+                context.fillPath()
+                context.restoreGState()
+            }
 
             // The block's padding: a blank row beside a ruled block lends
             // it `backgroundBlockPadding` points of its own height, fill
