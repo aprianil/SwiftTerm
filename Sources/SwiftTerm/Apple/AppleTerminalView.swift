@@ -3137,8 +3137,18 @@ extension TerminalView {
     func feedPrepare()
     {
         search.invalidate()
-        // Preserve manual selection while output is streaming when mouse reporting is disabled.
-        if allowMouseReporting {
+        // Output takes the selection only when the program is the one
+        // reading the mouse: while a program has mouse reporting on, a
+        // selection is a shift-drag over its grid and its next frame may
+        // have moved what was under it. With mouse reporting off the
+        // selection is the user's own, made over a program that streams
+        // (a coding agent replying, a build log), and until now every feed
+        // dropped it, so nothing could be selected while the program wrote:
+        // the drag landed and the next chunk of output took it away.
+        // `allowMouseReporting` alone said the program COULD read the mouse,
+        // which is the default for every view; `mouseMode` says it does.
+        // The view's `linefeed` keeps the same rule.
+        if allowMouseReporting && terminal.mouseMode != .off {
             selection.active = false
         }
         startDisplayUpdates()
