@@ -2152,6 +2152,23 @@ extension TerminalView {
             }
             return true
         }
+        /// Whether the block that has a row at `r` ends, walking `step`
+        /// rows at a time, against a blank row or the buffer's edge: the
+        /// side of the block away from the row asking. A block borrows
+        /// padding from a blank neighbour only when its other edge has one
+        /// too, so it has air on both sides or on neither. Air on one side
+        /// alone reads as the other side cut: claude's queued message sits
+        /// with "ctrl+enter to send now" pressed under it, and padded above
+        /// only, the hint looked cropped by the block's edge (sidealong,
+        /// 2026-09-19).
+        func farSideIsBlank (ofBlockAt r: Int, step: Int) -> Bool {
+            var row = r
+            while block(onRow: row) != nil {
+                row += step
+                if row < 0 || row >= displayBuffer.lines.count { return true }
+            }
+            return isBlank(row: row)
+        }
         // draw lines
         #if os(iOS) || os(visionOS)
         // On iOS, use contentOffset.y to determine the first visible row rather than
@@ -2418,7 +2435,8 @@ extension TerminalView {
             // and rule both, so the block has air above and below its words
             // without a row of the program's being invented. Drawn by the
             // blank row, not the block, so a redraw of either row leaves
-            // the other's pixels as they were.
+            // the other's pixels as they were. Lent only when the block's
+            // other edge is beside a blank row too (`farSideIsBlank`).
             if backgroundBlockPadding > 0, !rules.isEmpty, isBlank(row: row) {
                 let pad = min(backgroundBlockPadding, cellDimension.height)
                 func lend (_ block: (span: Range<Int>, fill: TTColor, rule: TTColor), y: CGFloat) {
@@ -2433,10 +2451,10 @@ extension TerminalView {
                 context.setShouldAntialias(false)
                 // The row above on screen is the smaller index, and this
                 // row's top edge is the one it shares with it.
-                if let above = block(onRow: row - 1) {
+                if let above = block(onRow: row - 1), farSideIsBlank(ofBlockAt: row - 1, step: -1) {
                     lend(above, y: lineOrigin.y + cellDimension.height - pad)
                 }
-                if let below = block(onRow: row + 1) {
+                if let below = block(onRow: row + 1), farSideIsBlank(ofBlockAt: row + 1, step: 1) {
                     lend(below, y: lineOrigin.y)
                 }
                 context.restoreGState()

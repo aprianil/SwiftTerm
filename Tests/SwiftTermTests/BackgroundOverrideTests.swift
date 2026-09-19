@@ -181,7 +181,12 @@ final class BackgroundBlockPaddingTests: XCTestCase {
         XCTAssertGreaterThan(padded.colorAt(x: midX, y: wordsY)!.blueComponent, 0.9)
     }
 
-    func testANeighbourWithContentLendsNothing () {
+    /// Text pressed against one edge of the block: that row is not drawn
+    /// over, and the blank row on the other edge lends nothing either, so
+    /// the block is tight on both sides rather than padded on one (until
+    /// 2026-09-19 the blank row still lent, and the block read as cut off
+    /// at the text's edge).
+    func testANeighbourWithContentLendsNothingAndNeitherDoesTheOtherSide () {
         let view = makeView(rowAbove: "a line of text above")
         view.backgroundBlockPadding = 6
         let cell = view.cellDimension!
@@ -191,7 +196,34 @@ final class BackgroundBlockPaddingTests: XCTestCase {
         let belowY = Int((cell.height * 2 + 2) * scale)
         let midX = Int(cell.width * 30 * scale)
         XCTAssertLessThan(rep.colorAt(x: midX, y: aboveY)!.blueComponent, 0.5, "a row with words on it is not drawn over")
-        XCTAssertGreaterThan(rep.colorAt(x: midX, y: belowY)!.blueComponent, 0.9, "the blank row below still lends")
+        XCTAssertLessThan(rep.colorAt(x: midX, y: belowY)!.blueComponent, 0.5, "and the blank row below lends nothing, so the block has no air on one side alone")
+    }
+
+    /// A block three rows tall with blank rows either side: the far side
+    /// is found through the block's own rows, and both lend.
+    func testATallBlockBorrowsFromBothBlankSides () {
+        _ = NSApplication.shared
+        var options = TerminalOptions.default
+        options.cols = 40
+        options.rows = 6
+        let font = NSFont.monospacedSystemFont(ofSize: 13, weight: .regular)
+        let view = TerminalView(frame: NSRect(x: 0, y: 0, width: 400, height: 120),
+                                font: font, options: options)
+        view.nativeBackgroundColor = .black
+        view.backgroundColorOverrides = [grey: .blue]
+        view.backgroundRules = [grey: .red]
+        view.backgroundRuleWidth = 2
+        view.backgroundBlockPadding = 6
+        let block = "\u{1b}[48;5;237m words                           \u{1b}[49m\r\n"
+        view.feed(byteArray: ArraySlice(Array("\r\n\(block)\(block)\(block)\r\ntext\r\n".utf8)))
+        let cell = view.cellDimension!
+        let rep = bitmap(of: view)
+        let scale = CGFloat(rep.pixelsWide) / view.bounds.width
+        let midX = Int(cell.width * 10 * scale)
+        let aboveY = Int((cell.height * 1 - 2) * scale)
+        let belowY = Int((cell.height * 4 + 2) * scale)
+        XCTAssertGreaterThan(rep.colorAt(x: midX, y: aboveY)!.blueComponent, 0.9, "the blank row above lends: the block's far edge, three rows down, is blank")
+        XCTAssertGreaterThan(rep.colorAt(x: midX, y: belowY)!.blueComponent, 0.9)
     }
 }
 #endif
