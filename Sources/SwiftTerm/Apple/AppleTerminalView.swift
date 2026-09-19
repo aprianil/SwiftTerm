@@ -3233,11 +3233,28 @@ extension TerminalView {
         if allowMouseReporting && terminal.mouseMode != .off {
             selection.active = false
         }
+        // What the selection covers before the output lands, so
+        // `feedFinish` can tell whether the output touched it.
+        selectedTextBeforeFeed = selection.active ? selection.getSelectedText() : nil
         startDisplayUpdates()
     }
-    
+
     func feedFinish ()
     {
+        // A selection is of text, not of cells: it stays while the program
+        // writes elsewhere, and while its rows scroll (the in-place scroll
+        // and the scrollback trim carry the positions along), and it goes
+        // the moment the text under it is not what was selected, whether
+        // the program erased the row, wrote over it, or cleared the
+        // screen. Compared as text rather than tracked write by write, so
+        // every path that changes a cell is covered and a frame that
+        // rewrites a row with the same words leaves the selection alone
+        // (sidealong, 2026-09-19: "when I highlight a text and then I
+        // delete the entire row the highlight is still there").
+        if let before = selectedTextBeforeFeed, selection.active, selection.getSelectedText() != before {
+            selection.selectNone()
+        }
+        selectedTextBeforeFeed = nil
         suspendDisplayUpdates ()
         if shouldDisplayImmediatelyAfterUserInput() {
             displayImmediately()

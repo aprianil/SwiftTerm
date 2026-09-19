@@ -41,6 +41,38 @@ final class SelectionWashTests: XCTestCase {
         XCTAssertFalse(view.selection.active, "mouse reporting is on: the program's frame moved on")
     }
 
+    /// The selection is of text: output elsewhere and a frame that writes
+    /// the same words again leave it; erasing its row, writing over it or
+    /// clearing the screen take it.
+    func testTheSelectionGoesWhenItsTextDoes () {
+        func fresh () -> TerminalView {
+            let view = makeView()
+            view.selection.setSelection(start: Position(col: 0, row: 1), end: Position(col: 4, row: 1))
+            XCTAssertEqual(view.selection.getSelectedText(), "four")
+            return view
+        }
+        var view = fresh()
+        view.feed(byteArray: ArraySlice(Array("written below\r\n".utf8)))
+        XCTAssertTrue(view.selection.active, "output on another row leaves it")
+
+        view = fresh()
+        // Row 2 (1-based) rewritten with the same words: a frame redraw.
+        view.feed(byteArray: ArraySlice(Array("\u{1b}[s\u{1b}[2;1Hfour five six\u{1b}[u".utf8)))
+        XCTAssertTrue(view.selection.active, "the same words again leave it")
+
+        view = fresh()
+        view.feed(byteArray: ArraySlice(Array("\u{1b}[s\u{1b}[2;1H\u{1b}[2K\u{1b}[u".utf8)))
+        XCTAssertFalse(view.selection.active, "the row erased under it takes it")
+
+        view = fresh()
+        view.feed(byteArray: ArraySlice(Array("\u{1b}[s\u{1b}[2;1Hnine ten\u{1b}[u".utf8)))
+        XCTAssertFalse(view.selection.active, "other words written over it take it")
+
+        view = fresh()
+        view.feed(byteArray: ArraySlice(Array("\u{1b}[2J\u{1b}[H".utf8)))
+        XCTAssertFalse(view.selection.active, "a cleared screen takes it")
+    }
+
     /// Rows dropped from the middle of the scrollback take a selection
     /// under them along with their text: what was selected stays selected.
     /// A selection on the dropped rows themselves goes with them.

@@ -229,6 +229,9 @@ open class TerminalView: UIScrollView, UITextInputTraits, UIKeyInput, UIScrollVi
     var cursorColorIsDefault = true
     var cursorTextColorIsDefault = true
     var reverseColorsSavedLayerBackground: CGColor?
+    /// The selection's text as `feedPrepare` read it, for `feedFinish` to
+    /// compare against; nil when nothing was selected.
+    var selectedTextBeforeFeed: String?
     /// Output received shortly after local input is likely echo or prompt redraw;
     /// render it without the 16.67ms frame-rate throttle so typing feels responsive.
     var lastUserInputUptimeNs: UInt64 = 0
