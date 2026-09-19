@@ -6807,7 +6807,11 @@ open class Terminal {
         if start < 0 || count <= 0 || start >= available { return 0 }
         let drop = min (count, available - start)
         if drop <= 0 { return 0 }
+        let oldCount = buffer.lines.count
         buffer.lines.splice (start: start, deleteCount: drop, items: [], change: { _ in })
+        // The rows under the cut moved up by `drop`: a selection on them
+        // follows its text, and one on the dropped rows goes with them.
+        selectionsAdjustForInPlaceScroll (top: start, bottom: oldCount - 1, lines: drop)
         let oldDisp = buffer.yDisp
         buffer.yBase = buffer.yBase - drop
         if oldDisp >= start + drop {

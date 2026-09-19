@@ -41,6 +41,35 @@ final class SelectionWashTests: XCTestCase {
         XCTAssertFalse(view.selection.active, "mouse reporting is on: the program's frame moved on")
     }
 
+    /// Rows dropped from the middle of the scrollback take a selection
+    /// under them along with their text: what was selected stays selected.
+    /// A selection on the dropped rows themselves goes with them.
+    func testASelectionFollowsItsTextWhenScrollbackIsDropped () {
+        let view = makeView()
+        var text = ""
+        for i in 0..<20 { text += "line \(i)\r\n" }
+        view.feed(byteArray: ArraySlice(Array(text.utf8)))
+        let terminal = view.getTerminal()
+        // Rows 0..<15 are scrollback (yBase 15 with 6 rows on screen... whatever it is, read it).
+        let base = terminal.buffer.yBase
+        XCTAssertGreaterThan(base, 6)
+        // Select on the screen: buffer rows base+1 ... base+2.
+        view.selection.setSelection(start: Position(col: 1, row: base + 1), end: Position(col: 3, row: base + 2))
+        let selectedText = view.selection.getSelectedText()
+        XCTAssertFalse(selectedText.isEmpty)
+
+        XCTAssertEqual(terminal.dropScrollbackRows(at: 2, count: 3), 3)
+        XCTAssertTrue(view.selection.active)
+        XCTAssertEqual(view.selection.start.row, base + 1 - 3)
+        XCTAssertEqual(view.selection.end.row, base + 2 - 3)
+        XCTAssertEqual(view.selection.getSelectedText(), selectedText, "the same text is selected")
+
+        // Dropping the selected rows themselves ends the selection.
+        view.selection.setSelection(start: Position(col: 0, row: 3), end: Position(col: 3, row: 4))
+        XCTAssertEqual(terminal.dropScrollbackRows(at: 2, count: 3), 3)
+        XCTAssertFalse(view.selection.active)
+    }
+
     /// Which corners a row's wash rounds: a lone word rounds all four; a
     /// paragraph rounds its outline's convex corners (the first row's top,
     /// the last row's bottom, the two steps) and the corners where its rows
