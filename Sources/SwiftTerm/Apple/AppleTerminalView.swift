@@ -592,15 +592,15 @@ extension TerminalView {
                 midx = ansi > 7 ? (Int (ansi) - 8) : Int(ansi)
             }
             if let c = colors [midx] {
-                return c
+                return isFg ? retonedForeground (c) : c
             }
             let tcolor = terminal.ansiColors [midx]
             let newColor = TTColor.make (color: tcolor)
             colors [midx] = newColor
-            return newColor
+            return isFg ? retonedForeground (newColor) : newColor
         case .trueColor(let r, let g, let b):
             if let tc = trueColors [color] {
-                return tc
+                return isFg ? retonedForeground (tc) : tc
             }
             let newColor = TTColor.make(red: CGFloat (r) / 255.0,
                                         green: CGFloat (g) / 255.0,
@@ -612,8 +612,27 @@ extension TerminalView {
                 trueColors.removeAll(keepingCapacity: true)
             }
             trueColors [color] = newColor
-            return newColor
+            return isFg ? retonedForeground (newColor) : newColor
         }
+    }
+
+    /// `foregroundRetone` applied, once per distinct colour.
+    func retonedForeground (_ color: TTColor) -> TTColor
+    {
+#if os(macOS)
+        guard let retone = foregroundRetone else { return color }
+        if let done = retonedForegrounds [color] {
+            return done
+        }
+        if retonedForegrounds.count >= 4096 {
+            retonedForegrounds.removeAll(keepingCapacity: true)
+        }
+        let done = retone (color)
+        retonedForegrounds [color] = done
+        return done
+#else
+        return color
+#endif
     }
 
     func nsUnderlineStyle(_ style: UnderlineStyle) -> NSUnderlineStyle {

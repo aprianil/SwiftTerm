@@ -375,6 +375,23 @@ open class TerminalView: NSView, NSTextInputClient, NSUserInterfaceValidations, 
         }
     }
 
+    /// Every palette and truecolor FOREGROUND, passed through this after it
+    /// is resolved, so an embedder can re-tone a program's colours for a
+    /// ground the program did not choose them for: a TUI that prints for a
+    /// dark terminal, drawn on a light one. The default foreground is not
+    /// passed (that is `nativeForegroundColor`), nor any background. Called
+    /// once per distinct colour; the results are cached until it changes.
+    /// Nil by default, which is the historical behaviour.
+    public var foregroundRetone: ((NSColor) -> NSColor)? {
+        didSet {
+            retonedForegrounds = [:]
+            colorsChanged()
+            terminal.updateFullScreen()
+            queuePendingDisplay()
+        }
+    }
+    var retonedForegrounds: [NSColor: NSColor] = [:]
+
     /// The margin the grid is drawn inside, in points: column 0 starts at
     /// `left`, and the columns that fit come from the width left over once
     /// both sides are taken off. For an embedder that wants the view's own
