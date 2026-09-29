@@ -123,5 +123,65 @@ final class BlockEdgeTests: XCTestCase {
         assertRed(colour(rep, view, x: inset + 1, row: 1), "the rule is at the block's first cell")
         assertFill(colour(rep, view, x: inset + 6, row: 1), "and the fill is the cells it painted")
     }
+    func testTheRuleIsDrawnWhereItWasPut () {
+        let view = makeView()
+        view.blockEdges = TerminalView.BlockEdges(left: 4, right: rightEdge(view))
+        view.blockRuleX = 0
+        let rep = bitmap(of: view)
+
+        assertRed(colour(rep, view, x: 1, row: 1), "the rule is at the x it was given")
+        assertGround(colour(rep, view, x: 3, row: 1), "the ground shows between it and the block")
+        assertFill(colour(rep, view, x: 6, row: 1), "and the block starts at its own edge")
+        assertFill(colour(rep, view, x: inset - 2, row: 1), "and runs on through the text margin")
+        assertGround(colour(rep, view, x: 1, row: 3), "a row the program left plain has no rule")
+    }
+
+    func testTheRuleAtTheGivenXCarriesThroughTheLentPadding () {
+        let view = makeView()
+        view.blockEdges = TerminalView.BlockEdges(left: 4, right: rightEdge(view))
+        view.blockRuleX = 0
+        view.backgroundBlockPadding = view.cellDimension.height * 0.5
+        let rep = bitmap(of: view)
+
+        assertRed(colour(rep, view, x: 1, row: 0, within: 0.8), "the pad above carries the rule")
+        assertRed(colour(rep, view, x: 1, row: 2, within: 0.2), "and so does the pad below")
+        assertGround(colour(rep, view, x: 1, row: 0, within: 0.2), "no further up than the pad reaches")
+        assertGround(colour(rep, view, x: 1, row: 2, within: 0.8), "nor further down")
+    }
+
+    /// The rounded corners are read where a 1 pt radius bites: the outer
+    /// pixel of the rule's right-hand corner, which a square rule fills.
+    func testTheRulesRightCornersRoundWhereTheBlockEnds () {
+        let view = makeView()
+        view.blockEdges = TerminalView.BlockEdges(left: 4, right: rightEdge(view))
+        view.blockRuleX = 0
+        // A rule wide enough that one pixel of its corner is unambiguously
+        // inside a square one and outside a rounded one.
+        let ruleWidth: CGFloat = 6
+        view.backgroundRuleWidth = ruleWidth
+        let cell = view.cellDimension!
+        let scale = CGFloat(bitmap(of: view).pixelsWide) / view.bounds.width
+
+        func cornerAlpha (_ rep: NSBitmapImageRep, top: Bool) -> CGFloat {
+            // Half a point in from the rule's right edge and from the row's
+            // outer edge: inside a square corner, outside a rounded one.
+            let x = Int((ruleWidth - 0.5) * scale)
+            let y = top ? Int((cell.height + 0.5) * scale)
+                        : Int((2 * cell.height - 0.5) * scale)
+            return rep.colorAt(x: x, y: y)!.redComponent
+        }
+
+        let square = bitmap(of: view)
+        XCTAssertGreaterThan(cornerAlpha(square, top: true), 0.8, "a square rule fills its top corner")
+        XCTAssertGreaterThan(cornerAlpha(square, top: false), 0.8, "and its bottom one")
+
+        view.blockRuleCornerRadius = ruleWidth
+        let rounded = bitmap(of: view)
+        XCTAssertLessThan(cornerAlpha(rounded, top: true), 0.2, "a rounded rule gives its top corner back")
+        XCTAssertLessThan(cornerAlpha(rounded, top: false), 0.2, "and its bottom one")
+        // The left edge stays square: the rule is a tab, not a pill.
+        let left = rounded.colorAt(x: Int(0.5 * scale), y: Int((cell.height + 0.5) * scale))!
+        XCTAssertGreaterThan(left.redComponent, 0.8, "the left corners stay square")
+    }
 }
 #endif

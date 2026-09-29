@@ -405,6 +405,29 @@ open class TerminalView: UIScrollView, UITextInputTraits, UIKeyInput, UIScrollVi
         }
     }
 
+    /// Where the block's rule is drawn, in points from the view's left
+    /// edge, rather than at the left of the block's own fill. For a rule
+    /// that sits on the panel's edge while the block it marks starts
+    /// further in. Nil by default, which draws it at the fill's left edge.
+    public var blockRuleX: CGFloat? = nil {
+        didSet {
+            terminal.updateFullScreen()
+            queuePendingDisplay()
+        }
+    }
+
+    /// The radius, in points, of the block rule's right-hand corners: the
+    /// two where the rule ends rather than running on into the row above or
+    /// below, the lent padding counted as part of it. The left corners stay
+    /// square, so a rule against the view's edge reads as a tab rather than
+    /// a floating pill. Zero, the default, is the square rule.
+    public var blockRuleCornerRadius: CGFloat = 0 {
+        didSet {
+            terminal.updateFullScreen()
+            queuePendingDisplay()
+        }
+    }
+
     /// How far, in points, a ruled block's fill and rule extend into a blank
     /// row above or below it, so a block has air around its words without
     /// a row of the program's being invented. Capped at one row. Zero, the

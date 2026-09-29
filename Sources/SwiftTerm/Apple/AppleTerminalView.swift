@@ -1841,6 +1841,31 @@ extension TerminalView {
         return path
     }
 
+    /// The block rule's outline in its rectangle (y up, `maxY` the edge
+    /// toward the row above): square down the left, its right corners
+    /// rounded by the radius given where the rule ends rather than running
+    /// on into the row above or below. A rule against the view's own edge
+    /// then reads as a tab rather than a floating pill.
+    func blockRulePath (_ rect: CGRect, topRight: CGFloat, bottomRight: CGFloat) -> CGPath {
+        let path = CGMutablePath()
+        path.move(to: CGPoint(x: rect.minX, y: rect.minY))
+        path.addLine(to: CGPoint(x: rect.minX, y: rect.maxY))
+        if topRight > 0 {
+            path.addArc(tangent1End: CGPoint(x: rect.maxX, y: rect.maxY),
+                        tangent2End: CGPoint(x: rect.maxX, y: rect.minY), radius: topRight)
+        } else {
+            path.addLine(to: CGPoint(x: rect.maxX, y: rect.maxY))
+        }
+        if bottomRight > 0 {
+            path.addArc(tangent1End: CGPoint(x: rect.maxX, y: rect.minY),
+                        tangent2End: CGPoint(x: rect.minX, y: rect.minY), radius: bottomRight)
+        } else {
+            path.addLine(to: CGPoint(x: rect.maxX, y: rect.minY))
+        }
+        path.closeSubpath()
+        return path
+    }
+
     func isColumnSelected(_ selectionRange: Range<Int>?, column: Int, width: Int) -> Bool {
         guard let selectionRange else {
             return false
@@ -2168,6 +2193,13 @@ extension TerminalView {
             }
             return isBlank(row: row)
         }
+        /// Whether the blank row `step` away from the block row `r` lends
+        /// it padding. The lent pad is the block's real edge on that side,
+        /// so the rule's corner belongs to the pad and not to this row.
+        func lends (toBlockAt r: Int, step: Int) -> Bool {
+            guard backgroundBlockPadding > 0, !rules.isEmpty else { return false }
+            return isBlank(row: r + step) && farSideIsBlank(ofBlockAt: r, step: -step)
+        }
         /// Where a block's fill and rule run to on a row: the edges the
         /// embedder gave, measured from the view's own bounds, or the
         /// block's own first and last cell.
@@ -2177,6 +2209,28 @@ extension TerminalView {
             }
             return (contentInsets.left + CGFloat(block.span.lowerBound) * cellDimension.width,
                     CGFloat(block.span.count) * cellDimension.width)
+        }
+        /// The rule down the block's left edge, at the absolute x the
+        /// embedder gave if it gave one, with its right corners rounded
+        /// where the block ends rather than running on.
+        func drawRule (_ block: (span: Range<Int>, fill: TTColor, rule: TTColor),
+                       y: CGFloat, height: CGFloat, roundTop: Bool, roundBottom: Bool) {
+            let rect = CGRect(x: blockRuleX ?? blockSpanX(block).x, y: y,
+                              width: backgroundRuleWidth, height: height)
+            let radius = min(blockRuleCornerRadius, rect.width, rect.height / 2)
+            context.saveGState()
+            context.setFillColor(cachedCGColor(block.rule))
+            if radius > 0, roundTop || roundBottom {
+                context.setShouldAntialias(true)
+                context.addPath(blockRulePath(rect,
+                                              topRight: roundTop ? radius : 0,
+                                              bottomRight: roundBottom ? radius : 0))
+                context.fillPath()
+            } else {
+                context.setShouldAntialias(false)
+                context.fill(rect)
+            }
+            context.restoreGState()
         }
         // draw lines
         #if os(iOS) || os(visionOS)
@@ -2427,14 +2481,15 @@ extension TerminalView {
                 }
             }
 
-            // The rule down the block's left edge, once per row, at the
-            // left of whatever the block's fill spans. Drawn after the
-            // runs so a fill of theirs cannot paint over it.
+            // The rule down the block's left edge, once per row. Drawn
+            // after the runs so a fill of theirs cannot paint over it. A
+            // corner is rounded only where the block stops here: not where
+            // its next row carries it on, and not where a blank neighbour
+            // lends it a pad that ends it instead.
             if let rowBlock {
-                let span = blockSpanX(rowBlock)
-                context.setFillColor(cachedCGColor(rowBlock.rule))
-                context.fill(CGRect(x: span.x, y: lineOrigin.y,
-                                    width: backgroundRuleWidth, height: cellDimension.height))
+                drawRule(rowBlock, y: lineOrigin.y, height: cellDimension.height,
+                         roundTop: block(onRow: row - 1) == nil && !lends(toBlockAt: row, step: -1),
+                         roundBottom: block(onRow: row + 1) == nil && !lends(toBlockAt: row, step: 1))
             }
 
             context.restoreGState()
@@ -2471,22 +2526,25 @@ extension TerminalView {
             // other edge is beside a blank row too (`farSideIsBlank`).
             if backgroundBlockPadding > 0, !rules.isEmpty, isBlank(row: row) {
                 let pad = min(backgroundBlockPadding, cellDimension.height)
-                func lend (_ block: (span: Range<Int>, fill: TTColor, rule: TTColor), y: CGFloat) {
+                func lend (_ block: (span: Range<Int>, fill: TTColor, rule: TTColor),
+                           y: CGFloat, roundTop: Bool, roundBottom: Bool) {
                     let span = blockSpanX(block)
                     context.setFillColor(cachedCGColor(block.fill))
                     context.fill(CGRect(x: span.x, y: y, width: span.width, height: pad))
-                    context.setFillColor(cachedCGColor(block.rule))
-                    context.fill(CGRect(x: span.x, y: y, width: backgroundRuleWidth, height: pad))
+                    drawRule(block, y: y, height: pad, roundTop: roundTop, roundBottom: roundBottom)
                 }
                 context.saveGState()
                 context.setShouldAntialias(false)
                 // The row above on screen is the smaller index, and this
                 // row's top edge is the one it shares with it.
                 if let above = block(onRow: row - 1), farSideIsBlank(ofBlockAt: row - 1, step: -1) {
-                    lend(above, y: lineOrigin.y + cellDimension.height - pad)
+                    // The pad under a block: the block's bottom edge.
+                    lend(above, y: lineOrigin.y + cellDimension.height - pad,
+                         roundTop: false, roundBottom: true)
                 }
                 if let below = block(onRow: row + 1), farSideIsBlank(ofBlockAt: row + 1, step: 1) {
-                    lend(below, y: lineOrigin.y)
+                    // The pad over a block: the block's top edge.
+                    lend(below, y: lineOrigin.y, roundTop: true, roundBottom: false)
                 }
                 context.restoreGState()
             }
