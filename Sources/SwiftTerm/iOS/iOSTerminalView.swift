@@ -376,6 +376,23 @@ open class TerminalView: UIScrollView, UITextInputTraits, UIKeyInput, UIScrollVi
         }
     }
 
+    /// Viewport rows left out of the draw: 0 the top visible row. A row
+    /// named here draws nothing, not its glyphs and not the backgrounds a
+    /// program painted on it, except a `rowBands` band that covers it. The
+    /// buffer keeps every cell, so selection, copy, readiness and anything
+    /// else reading the screen see what the program wrote. For an embedder
+    /// drawing a program's box itself and wanting the program's own rules
+    /// and status rows out of the way.
+    ///
+    /// Draw-time only, like `rowBands`: the setter asks for a repaint and
+    /// builds no rows.
+    public var hiddenRows: Set<Int> = [] {
+        didSet {
+            terminal.updateFullScreen()
+            queuePendingDisplay()
+        }
+    }
+
     /// A run of viewport rows painted in one colour under everything else
     /// the rows draw. See `rowBands`.
     public struct RowBand: Equatable {

@@ -2325,6 +2325,14 @@ extension TerminalView {
                 context.restoreGState()
             }
 
+            // A row the embedder asked to lose draws nothing else: no
+            // glyphs, no background a program painted, no block and no
+            // image. Only the band above is left, so a band can stand in
+            // for the rows it covers. The buffer is untouched.
+            if !hiddenRows.isEmpty, hiddenRows.contains(row - bufferOffset) {
+                continue
+            }
+
             switch renderMode {
             case .single:
                 break
