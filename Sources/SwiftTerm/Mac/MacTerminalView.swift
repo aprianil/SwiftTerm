@@ -375,6 +375,27 @@ open class TerminalView: NSView, NSTextInputClient, NSUserInterfaceValidations, 
         }
     }
 
+    /// The margin the grid is drawn inside, in points: column 0 starts at
+    /// `left`, and the columns that fit come from the width left over once
+    /// both sides are taken off. For an embedder that wants the view's own
+    /// edge, and the cell fills that reach it, further out than the text:
+    /// a background a program paints can then bleed past the words into the
+    /// margin, which a view cannot do when its edge and its first column are
+    /// the same x. `NSEdgeInsetsZero` by default, which is the historical
+    /// behaviour. Only `left` and `right` are honoured; the vertical pair is
+    /// carried for completeness and moves nothing. Honoured by the
+    /// CoreGraphics renderer, which is the one this fork draws with; the
+    /// Metal path ignores it.
+    public var contentInsets: NSEdgeInsets = NSEdgeInsetsZero {
+        didSet {
+            guard cellDimension != nil else { return }
+            _ = processSizeChange (newSize: frame.size)
+            terminal.updateFullScreen()
+            updateCursorPosition()
+            needsDisplay = true
+        }
+    }
+
     /// A rule down the left edge of every row whose background the program
     /// named in this colour, in the colour given. What a background alone
     /// cannot do over a translucent ground: a fill is a step lighter or
@@ -1288,12 +1309,18 @@ open class TerminalView: NSView, NSTextInputClient, NSUserInterfaceValidations, 
      */
     open func getOptimalFrameSize () -> NSRect
     {
-        return NSRect (x: 0, y: 0, width: cellDimension.width * CGFloat(terminal.cols) + reservedScrollerWidth, height: cellDimension.height * CGFloat(terminal.rows))
+        return NSRect (x: 0, y: 0,
+                       width: cellDimension.width * CGFloat(terminal.cols) + reservedScrollerWidth
+                            + contentInsets.left + contentInsets.right,
+                       height: cellDimension.height * CGFloat(terminal.rows)
+                            + contentInsets.top + contentInsets.bottom)
     }
 
     func getEffectiveWidth (size: CGSize) -> CGFloat
     {
-        max(0, size.width - reservedScrollerWidth)
+        // The columns come from what is left of the width once the scroller
+        // and the content margin have been taken off it.
+        max(0, size.width - reservedScrollerWidth - contentInsets.left - contentInsets.right)
     }
     
     open func scrolled(source terminal: Terminal, yDisp: Int) {
@@ -2190,8 +2217,8 @@ open class TerminalView: NSView, NSTextInputClient, NSUserInterfaceValidations, 
         // The overlay spans the full content width. Line 1 skips the portion
         // already occupied by text to the left of the caret (e.g. the prompt)
         // via an exclusion path; wrapped lines 2+ start from the left edge.
-        let horizontalInset: CGFloat = 4
-        let rightInset: CGFloat = 4
+        let horizontalInset: CGFloat = contentInsets.left + 4
+        let rightInset: CGFloat = contentInsets.right + 4
         let overlayX = horizontalInset
         let overlayWidth = max(cellDimension.width, bounds.width - horizontalInset - rightInset)
         let caretX = max(horizontalInset, caretView.frame.origin.x)
@@ -2660,7 +2687,7 @@ open class TerminalView: NSView, NSTextInputClient, NSUserInterfaceValidations, 
     // NSTextInputClient protocol implementation
     open func characterIndex(for point: NSPoint) -> Int {
         let local = convert(point, from: nil)
-        let col = Int(local.x / cellDimension.width)
+        let col = Int((local.x - contentInsets.left) / cellDimension.width)
         let row = Int((bounds.height - local.y) / cellDimension.height)
         return row * terminal.cols + col
     }
@@ -2938,7 +2965,7 @@ open class TerminalView: NSView, NSTextInputClient, NSUserInterfaceValidations, 
             return Position (col: Int (x), row: Int (bounds.height-y))
         }
         let displayBuffer = terminal.displayBuffer
-        let col = Int (point.x / cellDimension.width)
+        let col = Int (max (0, point.x - contentInsets.left) / cellDimension.width)
         let row = Int ((frame.height-point.y) / cellDimension.height)
         var colValue = min (max (0, col), terminal.cols-1)
         let bufferRow = row + displayBuffer.yDisp

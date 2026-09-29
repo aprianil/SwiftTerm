@@ -2218,7 +2218,10 @@ extension TerminalView {
             }
             let renderMode = displayBuffer.lines [row].renderMode
             let lineOffset = calcLineOffset(forRow: row)
-            let lineOrigin = CGPoint(x: 0, y: frame.height - lineOffset)
+            // Column 0 starts at the left content inset, so everything
+            // positioned off `lineOrigin.x` follows the margin without
+            // repeating the arithmetic.
+            let lineOrigin = CGPoint(x: contentInsets.left, y: frame.height - lineOffset)
 
             switch renderMode {
             case .single:
@@ -2466,7 +2469,7 @@ extension TerminalView {
                     let col = image.col
                     let offsetX = CGFloat(image.kittyPixelOffsetX) / offsetScale
                     let offsetY = CGFloat(image.kittyPixelOffsetY) / offsetScale
-                    let rect = CGRect(x: CGFloat (col)*cellDimension.width + offsetX,
+                    let rect = CGRect(x: lineOrigin.x + CGFloat (col)*cellDimension.width + offsetX,
                                       y: rowBase - CGFloat (image.pixelHeight) + offsetY,
                                       width: CGFloat (image.pixelWidth),
                                       height: CGFloat (image.pixelHeight))
@@ -2657,7 +2660,7 @@ extension TerminalView {
                     let col = image.col
                     let offsetX = CGFloat(image.kittyPixelOffsetX) / offsetScale
                     let offsetY = CGFloat(image.kittyPixelOffsetY) / offsetScale
-                    let rect = CGRect(x: CGFloat (col)*cellDimension.width + offsetX,
+                    let rect = CGRect(x: lineOrigin.x + CGFloat (col)*cellDimension.width + offsetX,
                                       y: rowBase - CGFloat (image.pixelHeight) + offsetY,
                                       width: CGFloat (image.pixelWidth),
                                       height: CGFloat (image.pixelHeight))
@@ -2667,7 +2670,7 @@ extension TerminalView {
             if !otherImages.isEmpty {
                 for image in otherImages {
                     let col = image.col
-                    let rect = CGRect(x: CGFloat (col)*cellDimension.width,
+                    let rect = CGRect(x: lineOrigin.x + CGFloat (col)*cellDimension.width,
                                       y: rowBase - CGFloat (image.pixelHeight),
                                       width: CGFloat (image.pixelWidth),
                                       height: CGFloat (image.pixelHeight))
@@ -2717,7 +2720,7 @@ extension TerminalView {
                 
                 context.saveGState ()
                 let start = CGPoint (
-                    x: CGFloat (drawStart ? start.col : end.col) * cellDimension.width,
+                    x: contentInsets.left + CGFloat (drawStart ? start.col : end.col) * cellDimension.width,
                     y: lineOrigin)
                 let end = CGPoint(x: start.x, y: start.y + cellDimension.height)
                 
@@ -2937,10 +2940,10 @@ extension TerminalView {
         let doublePosition = buffer.lines [vy].renderMode == .single ? 1.0 : 2.0
         #if os(iOS) || os(visionOS)
         let offset = (cellDimension.height * (CGFloat(buffer.y+(buffer.yBase))))
-        let lineOrigin = CGPoint(x: 0, y: offset)
+        let lineOrigin = CGPoint(x: contentInsets.left, y: offset)
         #else
         let offset = (cellDimension.height * (CGFloat(buffer.y-(buffer.yDisp-buffer.yBase)+1)))
-        let lineOrigin = CGPoint(x: 0, y: frame.height - offset)
+        let lineOrigin = CGPoint(x: contentInsets.left, y: frame.height - offset)
         #endif
         let charUnderCursor = buffer.lines [vy][buffer.x]
         // Span the caret across the full character so a block cursor covers a

@@ -333,6 +333,26 @@ open class TerminalView: UIScrollView, UITextInputTraits, UIKeyInput, UIScrollVi
         }
     }
 
+    /// The margin the grid is drawn inside, in points: column 0 starts at
+    /// `left`, and the columns that fit come from the width left over once
+    /// both sides are taken off. For an embedder that wants the view's own
+    /// edge, and the cell fills that reach it, further out than the text:
+    /// a background a program paints can then bleed past the words into the
+    /// margin, which a view cannot do when its edge and its first column are
+    /// the same x. `.zero` by default, which is the historical behaviour.
+    /// Only `left` and `right` are honoured; the vertical pair is carried
+    /// for completeness and moves nothing. Honoured by the CoreGraphics
+    /// renderer; the Metal path ignores it.
+    public var contentInsets: UIEdgeInsets = .zero {
+        didSet {
+            guard cellDimension != nil else { return }
+            _ = processSizeChange (newSize: bounds.size)
+            terminal.updateFullScreen()
+            updateCursorPosition()
+            setNeedsDisplay(bounds)
+        }
+    }
+
     /// A rule down the left edge of every row whose background the program
     /// named in this colour, in the colour given. What a background alone
     /// cannot do over a translucent ground: a fill is a step lighter or
@@ -1050,7 +1070,7 @@ open class TerminalView: UIScrollView, UITextInputTraits, UIKeyInput, UIScrollVi
             return Position (col: Int (x), row: Int (y))
         }
 
-        let col = Int (point.x / cellDimension.width)
+        let col = Int (max (0, point.x - contentInsets.left) / cellDimension.width)
         let row = Int (point.y / cellDimension.height)
         if row < 0 {
             return (Position(col: 0, row: 0), toInt (point))
@@ -1830,7 +1850,11 @@ open class TerminalView: UIScrollView, UITextInputTraits, UIKeyInput, UIScrollVi
      */
     open func getOptimalFrameSize () -> CGRect
     {
-        return CGRect (x: 0, y: 0, width: cellDimension.width * CGFloat(terminal.cols), height: cellDimension.height * CGFloat(terminal.rows))
+        return CGRect (x: 0, y: 0,
+                       width: cellDimension.width * CGFloat(terminal.cols)
+                            + contentInsets.left + contentInsets.right,
+                       height: cellDimension.height * CGFloat(terminal.rows)
+                            + contentInsets.top + contentInsets.bottom)
     }
     
     func getImageScale () -> CGFloat {
@@ -1839,7 +1863,9 @@ open class TerminalView: UIScrollView, UITextInputTraits, UIKeyInput, UIScrollVi
     
     func getEffectiveWidth (size: CGSize) -> CGFloat
     {
-        return size.width
+        // The columns come from what is left of the width once the content
+        // margin has been taken off it.
+        return max(0, size.width - contentInsets.left - contentInsets.right)
     }
     
     func updateDebugDisplay ()
