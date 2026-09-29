@@ -419,6 +419,44 @@ open class TerminalView: NSView, NSTextInputClient, NSUserInterfaceValidations, 
         }
     }
 
+    /// A run of viewport rows painted in one colour under everything else
+    /// the rows draw. See `rowBands`.
+    public struct RowBand: Equatable {
+        /// The viewport rows the band covers, 0 the top visible row.
+        public var rows: ClosedRange<Int>
+        /// The colour the band is filled in.
+        public var fill: NSColor
+        /// How far below the first row's top the band starts, in points, so
+        /// a band can take half of the row a program drew a rule on.
+        public var trimTop: CGFloat
+        /// How far above the last row's bottom the band stops, in points.
+        public var trimBottom: CGFloat
+
+        public init (rows: ClosedRange<Int>, fill: NSColor,
+                     trimTop: CGFloat = 0, trimBottom: CGFloat = 0) {
+            self.rows = rows
+            self.fill = fill
+            self.trimTop = trimTop
+            self.trimBottom = trimBottom
+        }
+    }
+
+    /// Bands of colour under a run of rows, drawn before anything those
+    /// rows carry. For an embedder giving a program's box a ground of its
+    /// own without the program having painted one: the rows are the rows
+    /// on screen, counted from the top visible one, and the trims let a
+    /// band start and stop part way down a row, so the half of a rule row
+    /// the box does not need can be left outside it. Across the extent
+    /// `blockEdges` gives, or the view's full width when it gives none.
+    /// Draw-time only: setting this repaints and rebuilds no rows, because
+    /// a built row does not know what is drawn under it. Empty by default.
+    public var rowBands: [RowBand] = [] {
+        didSet {
+            terminal.updateFullScreen()
+            queuePendingDisplay()
+        }
+    }
+
     /// How far in from the view's own left and right edges a ruled block is
     /// drawn, in points. See `blockEdges`.
     public struct BlockEdges: Equatable {

@@ -2210,6 +2210,15 @@ extension TerminalView {
             return (contentInsets.left + CGFloat(block.span.lowerBound) * cellDimension.width,
                     CGFloat(block.span.count) * cellDimension.width)
         }
+        /// Where a row band runs to: the block's edges when the embedder
+        /// gave any, so a band and a block line up, or the view's own
+        /// width when it did not.
+        func bandSpanX () -> (x: CGFloat, width: CGFloat) {
+            if let edges = blockEdges {
+                return (edges.left, max(0, bounds.width - edges.left - edges.right))
+            }
+            return (0, bounds.width)
+        }
         /// The rule down the block's left edge, at the absolute x the
         /// embedder gave if it gave one, with its right corners rounded
         /// where the block ends rather than running on.
@@ -2285,6 +2294,36 @@ extension TerminalView {
             // positioned off `lineOrigin.x` follows the margin without
             // repeating the arithmetic.
             let lineOrigin = CGPoint(x: contentInsets.left, y: frame.height - lineOffset)
+
+            // The embedder's bands, under everything this row draws. The
+            // band's own rows are counted from the top visible row, which
+            // is what `bufferOffset` takes out of an absolute one, and the
+            // trims take points off the first row's top and the last row's
+            // bottom so a band can start part way down a row.
+            if !rowBands.isEmpty {
+                let viewportRow = row - bufferOffset
+                let span = bandSpanX()
+                context.saveGState()
+                context.setShouldAntialias(false)
+                for band in rowBands where band.rows.contains(viewportRow) {
+                    var y = lineOrigin.y
+                    var height = cellDimension.height
+                    if viewportRow == band.rows.lowerBound {
+                        // The top of the row is `y + height`, so taking
+                        // height off it brings the band's top down.
+                        height -= min(max(0, band.trimTop), height)
+                    }
+                    if viewportRow == band.rows.upperBound {
+                        let trim = min(max(0, band.trimBottom), height)
+                        y += trim
+                        height -= trim
+                    }
+                    guard height > 0, span.width > 0 else { continue }
+                    context.setFillColor(cachedCGColor(band.fill))
+                    context.fill(CGRect(x: span.x, y: y, width: span.width, height: height))
+                }
+                context.restoreGState()
+            }
 
             switch renderMode {
             case .single:
