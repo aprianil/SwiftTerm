@@ -419,6 +419,35 @@ open class TerminalView: NSView, NSTextInputClient, NSUserInterfaceValidations, 
         }
     }
 
+    /// How far in from the view's own left and right edges a ruled block is
+    /// drawn, in points. See `blockEdges`.
+    public struct BlockEdges: Equatable {
+        /// The block's left edge, from the view's left edge.
+        public var left: CGFloat
+        /// The block's right edge, from the view's right edge.
+        public var right: CGFloat
+
+        public init (left: CGFloat, right: CGFloat) {
+            self.left = left
+            self.right = right
+        }
+    }
+
+    /// Where a ruled block's fill runs to, measured from the view's own
+    /// edges rather than from the cells the program painted. A block then
+    /// reaches past its words into the margin `contentInsets` left, which
+    /// is what a message a program echoes back looks like when it is one
+    /// card rather than a run of coloured cells. The rule and the padding a
+    /// blank neighbour lends take the same extent, so the block is one
+    /// shape. Nil by default, which fills the block's first grey cell to
+    /// its last, the historical behaviour.
+    public var blockEdges: BlockEdges? = nil {
+        didSet {
+            terminal.updateFullScreen()
+            queuePendingDisplay()
+        }
+    }
+
     /// How far, in points, a ruled block's fill and rule extend into a blank
     /// row above or below it, so a block has air around its words without
     /// a row of the program's being invented. Capped at one row. Zero, the

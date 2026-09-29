@@ -2119,7 +2119,6 @@ extension TerminalView {
         let rules: [(background: TTColor, rule: TTColor)] = backgroundRules.map {
             (mapColor(color: $0.key, isFg: false, isBold: false), $0.value)
         }
-        var ruledRow = Int.min
 
         /// The block on a row, if the row carries a ruled background: the
         /// columns it spans, the colour it is filled with, and its rule.
@@ -2168,6 +2167,16 @@ extension TerminalView {
                 if row < 0 || row >= displayBuffer.lines.count { return true }
             }
             return isBlank(row: row)
+        }
+        /// Where a block's fill and rule run to on a row: the edges the
+        /// embedder gave, measured from the view's own bounds, or the
+        /// block's own first and last cell.
+        func blockSpanX (_ block: (span: Range<Int>, fill: TTColor, rule: TTColor)) -> (x: CGFloat, width: CGFloat) {
+            if let edges = blockEdges {
+                return (edges.left, max(0, bounds.width - edges.left - edges.right))
+            }
+            return (contentInsets.left + CGFloat(block.span.lowerBound) * cellDimension.width,
+                    CGFloat(block.span.count) * cellDimension.width)
         }
         // draw lines
         #if os(iOS) || os(visionOS)
@@ -2329,11 +2338,29 @@ extension TerminalView {
                     return (segment, ctLine, runs)
                 }
 
+            // The row's block, if it has one: its fill, its rule, and the
+            // colour the runs carrying it need not paint again.
+            let rowBlock = rules.isEmpty ? nil : block(onRow: row)
+
             // Background fill loop — uses cached CTLines
             context.saveGState()
             context.setShouldAntialias(false)
             context.setLineCap(.square)
             context.setLineWidth(0)
+
+            // A block with edges of its own is filled as one rectangle
+            // before the runs, from the view's left edge to its right,
+            // rather than cell by cell. The runs that carry its colour then
+            // skip their own fill: painting it twice would double-composite
+            // a translucent override.
+            var blockFilled: TTColor? = nil
+            if blockEdges != nil, let rowBlock {
+                let span = blockSpanX(rowBlock)
+                blockFilled = rowBlock.fill
+                context.setFillColor(cachedCGColor(rowBlock.fill))
+                context.fill(CGRect(x: span.x, y: lineOrigin.y,
+                                    width: span.width, height: cellDimension.height))
+            }
 
             for prepared in preparedSegments {
                 var processedGlyphs = 0
@@ -2371,7 +2398,9 @@ extension TerminalView {
                     // view's layer background already paints that color, and
                     // filling it again would double-composite when the
                     // background is translucent (backgroundOpacity < 1)
-                    if let backgroundColor = preparedRun.backgroundColor, backgroundColor != effectiveNativeBackgroundColor {
+                    if let backgroundColor = preparedRun.backgroundColor,
+                       backgroundColor != effectiveNativeBackgroundColor,
+                       backgroundColor != blockFilled {
                         let columnSpan = max(0, endColumn - startColumn)
                         if columnSpan > 0 {
                             var rect = CGRect(
@@ -2393,19 +2422,19 @@ extension TerminalView {
 
                             context.setFillColor(cachedCGColor(backgroundColor))
                             context.fill(rect)
-
-                            // The rule down the block's left edge, once per
-                            // row, at the leftmost run that carries the
-                            // background: runs come in column order.
-                            if ruledRow != row, let rule = rules.first(where: { $0.background == backgroundColor }) {
-                                ruledRow = row
-                                context.setFillColor(cachedCGColor(rule.rule))
-                                context.fill(CGRect(x: rect.minX, y: rect.minY,
-                                                    width: backgroundRuleWidth, height: rect.height))
-                            }
                         }
                     }
                 }
+            }
+
+            // The rule down the block's left edge, once per row, at the
+            // left of whatever the block's fill spans. Drawn after the
+            // runs so a fill of theirs cannot paint over it.
+            if let rowBlock {
+                let span = blockSpanX(rowBlock)
+                context.setFillColor(cachedCGColor(rowBlock.rule))
+                context.fill(CGRect(x: span.x, y: lineOrigin.y,
+                                    width: backgroundRuleWidth, height: cellDimension.height))
             }
 
             context.restoreGState()
@@ -2443,12 +2472,11 @@ extension TerminalView {
             if backgroundBlockPadding > 0, !rules.isEmpty, isBlank(row: row) {
                 let pad = min(backgroundBlockPadding, cellDimension.height)
                 func lend (_ block: (span: Range<Int>, fill: TTColor, rule: TTColor), y: CGFloat) {
-                    let x = lineOrigin.x + CGFloat(block.span.lowerBound) * cellDimension.width
-                    let width = CGFloat(block.span.count) * cellDimension.width
+                    let span = blockSpanX(block)
                     context.setFillColor(cachedCGColor(block.fill))
-                    context.fill(CGRect(x: x, y: y, width: width, height: pad))
+                    context.fill(CGRect(x: span.x, y: y, width: span.width, height: pad))
                     context.setFillColor(cachedCGColor(block.rule))
-                    context.fill(CGRect(x: x, y: y, width: backgroundRuleWidth, height: pad))
+                    context.fill(CGRect(x: span.x, y: y, width: backgroundRuleWidth, height: pad))
                 }
                 context.saveGState()
                 context.setShouldAntialias(false)
