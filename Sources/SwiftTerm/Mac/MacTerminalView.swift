@@ -2811,7 +2811,9 @@ open class TerminalView: NSView, NSTextInputClient, NSUserInterfaceValidations, 
     // NSTextInputClient protocol implementation
     open func characterIndex(for point: NSPoint) -> Int {
         let local = convert(point, from: nil)
-        let col = Int((local.x - contentInsets.left) / cellDimension.width)
+        // Clamped like `calculateMouseHit`: a point in the left inset would
+        // otherwise be a negative column, the previous row's last cell.
+        let col = min(max(0, Int((local.x - contentInsets.left) / cellDimension.width)), terminal.cols - 1)
         let row = Int((bounds.height - local.y) / cellDimension.height)
         return row * terminal.cols + col
     }
