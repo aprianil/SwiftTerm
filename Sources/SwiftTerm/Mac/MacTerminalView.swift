@@ -367,6 +367,20 @@ open class TerminalView: NSView, NSTextInputClient, NSUserInterfaceValidations, 
     /// translucent ground that rides the window's own instead of an opaque
     /// grey that sits on top of it. Foregrounds are not touched. Empty by
     /// default, which is the historical behaviour.
+    /// A foreground the program prints in one colour, drawn in another.
+    /// Keyed like `backgroundColorOverrides`, by the colour as the program
+    /// named it, so an embedder can move one colour a program uses as its
+    /// own mark without knowing what a derived 256-colour palette resolves
+    /// that index to. Wins over `foregroundRetone`. Empty by default, which
+    /// is the historical behaviour.
+    public var foregroundColorOverrides: [Attribute.Color: NSColor] = [:] {
+        didSet {
+            colorsChanged()
+            terminal.updateFullScreen()
+            queuePendingDisplay()
+        }
+    }
+
     public var backgroundColorOverrides: [Attribute.Color: NSColor] = [:] {
         didSet {
             colorsChanged()

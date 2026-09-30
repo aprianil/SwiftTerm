@@ -558,6 +558,9 @@ extension TerminalView {
         if !isFg, let override = backgroundColorOverrides [color] {
             return override
         }
+        if isFg, let override = foregroundColorOverrides [color] {
+            return override
+        }
         switch color {
         case .defaultColor:
             if isFg {
