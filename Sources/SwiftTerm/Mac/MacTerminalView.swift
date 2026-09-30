@@ -406,6 +406,25 @@ open class TerminalView: NSView, NSTextInputClient, NSUserInterfaceValidations, 
     }
     var retonedForegrounds: [NSColor: NSColor] = [:]
 
+    /// Every truecolor the program names, foreground and background, passed
+    /// through this after it is resolved and after `foregroundRetone`, so an
+    /// embedder can draw a program's own exact colours in a palette of its
+    /// choosing: a theme applied to everything a program prints, not only to
+    /// the 16 and the 256 derived from them. The Bool is true for a
+    /// foreground. Palette colours and the default pair are not passed, and
+    /// `backgroundColorOverrides` and `foregroundColorOverrides` win over it.
+    /// Called once per distinct colour and side; the results are cached until
+    /// it changes. Nil by default, which is the historical behaviour.
+    public var trueColorProjection: ((NSColor, Bool) -> NSColor)? {
+        didSet {
+            projectedTrueColors = [[:], [:]]
+            colorsChanged()
+            terminal.updateFullScreen()
+            queuePendingDisplay()
+        }
+    }
+    var projectedTrueColors: [[NSColor: NSColor]] = [[:], [:]]
+
     /// The margin the grid is drawn inside, in points: column 0 starts at
     /// `left`, and the columns that fit come from the width left over once
     /// both sides are taken off. For an embedder that wants the view's own

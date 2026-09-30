@@ -603,7 +603,7 @@ extension TerminalView {
             return isFg ? retonedForeground (newColor) : newColor
         case .trueColor(let r, let g, let b):
             if let tc = trueColors [color] {
-                return isFg ? retonedForeground (tc) : tc
+                return projected (isFg ? retonedForeground (tc) : tc, isFg: isFg)
             }
             let newColor = TTColor.make(red: CGFloat (r) / 255.0,
                                         green: CGFloat (g) / 255.0,
@@ -615,8 +615,27 @@ extension TerminalView {
                 trueColors.removeAll(keepingCapacity: true)
             }
             trueColors [color] = newColor
-            return isFg ? retonedForeground (newColor) : newColor
+            return projected (isFg ? retonedForeground (newColor) : newColor, isFg: isFg)
         }
+    }
+
+    /// `trueColorProjection` applied, once per distinct colour and side.
+    func projected (_ color: TTColor, isFg: Bool) -> TTColor
+    {
+#if os(macOS)
+        guard let project = trueColorProjection else { return color }
+        if let done = projectedTrueColors [isFg ? 1 : 0][color] {
+            return done
+        }
+        if projectedTrueColors [isFg ? 1 : 0].count >= 4096 {
+            projectedTrueColors [isFg ? 1 : 0].removeAll(keepingCapacity: true)
+        }
+        let done = project (color, isFg)
+        projectedTrueColors [isFg ? 1 : 0][color] = done
+        return done
+#else
+        return color
+#endif
     }
 
     /// `foregroundRetone` applied, once per distinct colour.
