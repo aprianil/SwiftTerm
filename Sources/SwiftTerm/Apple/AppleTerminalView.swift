@@ -877,13 +877,42 @@ extension TerminalView {
         colorsChanged ()
     }
 
+    /// **A synchronized frame (DECSET 2026) is shown whole, and shown.**
+    ///
+    /// An application that redraws its whole screen several times a second
+    /// (claude's agent view while it scrolls: a frame every 17 ms or so, each
+    /// arriving as two pushes 8 ms apart) is mid-frame about half the time.
+    /// Left to the 16.67 ms tick, a frame was rarely shown at all: the tick
+    /// queued at one frame's close fires inside the next frame, finds output
+    /// suspended and returns, and the tick after it is queued at the next
+    /// close, a frame later, into the same phase. The view sat on an old
+    /// picture for as long as the frames kept coming.
+    ///
+    /// So a frame's close updates the display right away when the last update
+    /// is a tick or more old, and queues the tick otherwise, which keeps a
+    /// burst (a replay, a resize) to one update per tick.
+    ///
+    /// And a frame's open first draws anything already marked dirty: from here
+    /// until the close the buffer is a half-drawn screen, so a draw the run
+    /// loop gets to later would show the application's picture torn in two.
     public func synchronizedOutputChanged (source: Terminal, active: Bool)
     {
-        if !active {
-            updateScroller()
-            queuePendingDisplay()
-            terminalDelegate?.scrolled(source: self, position: scrollPosition)
+        if active {
+            #if os(macOS)
+            if window != nil, needsDisplay { displayIfNeeded() }
+            #endif
+            return
         }
+        #if os(macOS)
+        if window != nil, bounds.height > 0 { DrawProbe.frameClosed() }
+        #endif
+        updateScroller()
+        if DispatchTime.now().uptimeNanoseconds &- lastDisplayUpdateNs >= 16_670_000 {
+            updateDisplay()
+        } else {
+            queuePendingDisplay()
+        }
+        terminalDelegate?.scrolled(source: self, position: scrollPosition)
     }
 
     public func setBackgroundColor(source: Terminal, color: Color) {
@@ -2968,6 +2997,8 @@ extension TerminalView {
         if notifyUpdateChanges {
             terminalDelegate?.rangeChanged (source: self, startY: rowStart, endY: rowEnd)
         }
+        lastDisplayUpdateNs = DispatchTime.now().uptimeNanoseconds
+        DrawProbe.presented()
 
         terminal.clearUpdateRange ()
 

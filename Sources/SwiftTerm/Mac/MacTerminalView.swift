@@ -217,6 +217,7 @@ open class TerminalView: NSView, NSTextInputClient, NSUserInterfaceValidations, 
     private var findBarOptions: SearchOptions = SearchOptions()
     var debug: TerminalDebugView?
     var pendingDisplay: Bool = false
+    var lastDisplayUpdateNs: UInt64 = 0
     var textBlinkVisible = true
     var textBlinkTimer: Timer?
     var textBlinkObservers: [(NotificationCenter, NSObjectProtocol)] = []
@@ -1590,6 +1591,7 @@ open class TerminalView: NSView, NSTextInputClient, NSUserInterfaceValidations, 
     }
     
     override public func draw (_ dirtyRect: NSRect) {
+        DrawProbe.drew(torn: terminal.synchronizedOutputActive)
 #if canImport(MetalKit)
         if metalView != nil {
             return
