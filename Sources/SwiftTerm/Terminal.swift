@@ -385,7 +385,8 @@ open class Terminal {
         buffer.semanticClickMode
     }
 
-    private let synchronizedOutputTimeoutSeconds: TimeInterval = 1.0
+    // A var for the tests, which hold a terminal mid-frame for longer than this.
+    var synchronizedOutputTimeoutSeconds: TimeInterval = 1.0
     public private(set) var synchronizedOutputActive: Bool = false
     private var synchronizedOutputTimeoutItem: DispatchWorkItem?
 
@@ -592,6 +593,13 @@ open class Terminal {
     // recursive invocation (nativeForegroundColor sets the terminal
     // color, which in turn broadcasts the request for a change)
     var settingFgColor = false, settingBgColor = false, settingCursorColor = false
+
+    // True once a program set the colour with OSC 10, 11 or 12. A snapshot
+    // carries only these: the embedder's own ground and ink are not the
+    // program's to hand to another terminal.
+    var programSetForegroundColor = false
+    var programSetBackgroundColor = false
+    var programSetCursorColor = false
 
     /// This tracks the current foreground color for the application.
     public var foregroundColor: Color = Color.defaultForeground {
@@ -1202,6 +1210,59 @@ open class Terminal {
     }
 
     //
+    // MARK: - Snapshot access
+    //
+    // What TerminalSnapshot.swift reads to write this terminal out, and the
+    // setters its fork-private sequences call to put the same state into
+    // another one. They live here because the fields are private to this
+    // file; nothing but the snapshot uses them.
+
+    var snapshotPen: Attribute {
+        get { curAttr }
+        set { curAttr = newValue }
+    }
+
+    /// The link new cells are stamped with, as the program named it in OSC 8.
+    var snapshotActiveHyperlink: String? {
+        switch activeHyperlink {
+        case .none, .unavailable:
+            return nil
+        case .pending(let payload):
+            return payload
+        case .resolved(let atom):
+            return atom.target as? String
+        }
+    }
+
+    func snapshotResolveActiveHyperlink() -> TinyAtom? {
+        resolveActiveHyperlink()
+    }
+
+    /// The first bytes of a UTF-8 character whose last bytes have not arrived.
+    var snapshotPartialCharacter: [UInt8] {
+        readingBuffer.putbackBuffer
+    }
+
+    var snapshotCharsets: (current: [UInt8: String]?, designated: [[UInt8: String]?]) {
+        (charset, gCharsets)
+    }
+
+    func snapshotSetCharsets(level: UInt8, designated: [[UInt8: String]?], current: [UInt8: String]?) {
+        gLevel = level
+        gCharsets = designated
+        charset = current
+    }
+
+    /// The kitty keyboard flags and the stack under them, for one buffer.
+    func snapshotKeyboardMode(alternate: Bool) -> (flags: Int, stack: [Int]) {
+        let mode = alternate ? keyboardModeAlt : keyboardModeNormal
+        return (mode.flags.rawValue, mode.stack.map { $0.rawValue })
+    }
+
+    var snapshotMouseProtocol: MouseProtocolEncoding { mouseProtocol }
+
+    var snapshotSavedBidiPrivateModes: [Int: Bool] { savedBidiPrivateModes }
+
     // Because data might not be complete, we need to put back data that we read to process on
     // a future read.  To prepare for reading, on every call to parse, the prepare method is
     // given the new ArraySlice to read from.
@@ -2943,12 +3004,15 @@ open class Terminal {
             switch target {
             case 0:
                 foregroundColor = color
+                programSetForegroundColor = true
                 tdel?.setForegroundColor(source: self, color: color)
             case 1:
                 backgroundColor = color
+                programSetBackgroundColor = true
                 tdel?.setBackgroundColor(source: self, color: color)
             case 2:
                 cursorColor = color
+                programSetCursorColor = true
                 tdel?.setCursorColor(source: self, color: color)
                 break
             default:
@@ -2968,6 +3032,7 @@ open class Terminal {
 
         if let background = Color.parseColor(data) {
             backgroundColor = background
+            programSetBackgroundColor = true
             tdel?.setBackgroundColor(source: self, color: background)
         }
     }
@@ -2976,6 +3041,7 @@ open class Terminal {
     {
         if let cursorColor = Color.parseColor(data) {
             self.cursorColor = cursorColor
+            programSetCursorColor = true
             tdel?.setCursorColor(source: self, color: cursorColor)
         }
     }
@@ -3384,7 +3450,11 @@ open class Terminal {
         if marginMode {
             if buffer.x >= buffer.marginLeft && buffer.x <= buffer.marginRight {
                 let columnCount = buffer.marginRight-buffer.marginLeft+1
-                let rowCount = buffer.scrollBottom-buffer.scrollTop
+                // The rows from the cursor to the bottom of the region. Counted
+                // from the top of the region it ran past the bottom, and past
+                // the end of a buffer with no scrollback, where the index wraps
+                // around onto the first rows of the screen.
+                let rowCount = buffer.scrollBottom-buffer.y
                 for _ in 0..<p {
                     for i in (0..<rowCount).reversed() {
                         let src = buffer.lines [row+i]
@@ -4596,7 +4666,9 @@ open class Terminal {
         bidiArrowKeySwap = options.initialBidiArrowKeySwap
         savedBidiPrivateModes.removeAll()
         cursorHidden = false
-        insertMode = false
+        // Through the setter: the buffers keep their own copy of the flag,
+        // and it is the copy the print path reads.
+        setInsertMode(false)
         originMode = false
 
         reverseWraparound = false
@@ -6025,9 +6097,11 @@ open class Terminal {
         let ea = eraseAttr ()
         
         if marginMode {
-            if buffer.x >= buffer.marginLeft && buffer.x <= buffer.marginRight {
+            if buffer.x >= buffer.marginLeft && buffer.x <= buffer.marginRight
+                && buffer.y >= buffer.scrollTop && buffer.y <= buffer.scrollBottom {
                 let columnCount = buffer.marginRight-buffer.marginLeft+1
-                let rowCount = buffer.scrollBottom-buffer.scrollTop
+                // From the cursor to the bottom of the region, as in cmdInsertLines.
+                let rowCount = buffer.scrollBottom-buffer.y
                 for _ in 0..<p {
                     for i in 0..<(rowCount) {
                         let src = buffer.lines [row+i+1]

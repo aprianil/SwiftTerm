@@ -289,6 +289,13 @@ public class EscapeSequenceParser {
         table.add (codes: [0x1b, 0x9c], state: .dcsPassthrough, action: .dcsUnhook, next: .ground)
         table.add (code: NonAsciiPrintable, state: .oscString, action: .oscPut, next: .oscString)
         table.add (code: NonAsciiPrintable, state: .apcString, action: .oscPut, next: .apcString)
+        // 0x80 to 0x9f inside a string are UTF-8 continuation bytes, never C1
+        // controls: the oscPut loop below already takes them as payload, so
+        // the table has to agree or the same title parses two ways depending
+        // on where a read happened to cut it (the 0x9c in "✳" ended the
+        // string when it was the first byte of a read).
+        table.add (codes: r (low: 0x80, high: 0xa0), state: .oscString, action: .oscPut, next: .oscString)
+        table.add (codes: r (low: 0x80, high: 0xa0), state: .apcString, action: .oscPut, next: .apcString)
         return TransitionTable(table.table)
     }
     
@@ -347,6 +354,18 @@ public class EscapeSequenceParser {
     var _collect: cstring
     var _parameterLimitExceeded: Bool
     var printHandler: PrintHandler = { (slice : ArraySlice<UInt8>) -> () in }
+
+    /// The bytes of the sequence the parser is in the middle of: everything
+    /// fed since the ESC that opened it, less any control that already ran
+    /// (a LF inside a CSI executes at once and must not run twice). Empty in
+    /// ground state. Fed to a parser in ground state, these put it in this
+    /// parser's state, which is how `Terminal.snapshot` carries a
+    /// half-parsed sequence.
+    private(set) var pendingBytes: [UInt8] = []
+    /// True when the sequence in progress outgrew `maximumPendingBytes`. Its
+    /// bytes are no longer kept, and a snapshot writes it as abandoned.
+    private(set) var pendingOverflow = false
+    static let maximumPendingBytes = 64 * 1024
     var printStateReset: () -> () = {  }
     
     private static let sharedVt500Table = EscapeSequenceParser.buildVt500TransitionTable()
@@ -584,7 +603,9 @@ public class EscapeSequenceParser {
         case 12:   terminal.oscSetColors(data, startAt: 2)
         case 52:   terminal.oscClipboard(data)
         case 104:  terminal.oscResetColor(data)
-        case 112:  terminal.tdel?.setCursorColor(source: terminal, color: nil)
+        case 112:
+            terminal.programSetCursorColor = false
+            terminal.tdel?.setCursorColor(source: terminal, color: nil)
         case 133:  terminal.oscSemanticPrompt(data)
         case 777:  terminal.oscNotification(data)
         case 1337: terminal.osciTerm2(data)
@@ -601,6 +622,10 @@ public class EscapeSequenceParser {
 
         switch command {
         case 0x47: terminal.handleKittyGraphics(content)  // G
+        case 0x73:                                        // s
+            if !terminal.handleSnapshotSequence(content) {
+                apcHandlerFallback(command, content)
+            }
         default:
             apcHandlerFallback(command, content)
         }
@@ -647,6 +672,8 @@ public class EscapeSequenceParser {
         _collect = []
         _parameterLimitExceeded = false
         activeDcsHandler = nil
+        pendingBytes.removeAll()
+        pendingOverflow = false
         printStateReset()
     }
 
@@ -692,6 +719,11 @@ public class EscapeSequenceParser {
         var parameterLimitExceeded = self._parameterLimitExceeded
         let tableData = table.table
         var dcsHandler = activeDcsHandler
+        // Where this read's share of `pendingBytes` starts, or -1 in ground
+        // state. Only the slow path below touches it, so the print run and
+        // the parameter digits pay nothing for the bookkeeping.
+        var pendingStart = currentState == .ground ? -1 : data.startIndex
+        var pendingCarried = !pendingBytes.isEmpty || pendingOverflow
         
         //dump (data)
             
@@ -913,8 +945,34 @@ public class EscapeSequenceParser {
                 dcs = -1
                 printStateReset()
             }
-            currentState = ParserState (rawValue: transition & 15)!
+            let nextState = ParserState (rawValue: transition & 15)!
+            if nextState == .ground {
+                pendingStart = -1
+                if pendingCarried {
+                    pendingBytes.removeAll(keepingCapacity: true)
+                    pendingOverflow = false
+                    pendingCarried = false
+                }
+            } else if code == 0x1b || currentState == .ground {
+                // ESC drops whatever was in progress and starts over.
+                pendingStart = i
+                if pendingCarried {
+                    pendingBytes.removeAll(keepingCapacity: true)
+                    pendingOverflow = false
+                    pendingCarried = false
+                }
+            } else if action == .execute {
+                // A control inside a sequence ran just now and left the
+                // sequence as it was: keep the bytes around it, not the byte.
+                appendPending(data [pendingStart..<i])
+                pendingCarried = true
+                pendingStart = i + 1
+            }
+            currentState = nextState
             i += 1
+        }
+        if pendingStart != -1 {
+            appendPending(data [pendingStart..<end])
         }
         // push leftover pushable buffers to terminal
         if currentState == .ground && (~print != 0) {
@@ -939,6 +997,19 @@ public class EscapeSequenceParser {
         
     }
     
+    private func appendPending (_ bytes: ArraySlice<UInt8>)
+    {
+        if pendingOverflow {
+            return
+        }
+        if pendingBytes.count + bytes.count > EscapeSequenceParser.maximumPendingBytes {
+            pendingBytes.removeAll()
+            pendingOverflow = true
+            return
+        }
+        pendingBytes.append(contentsOf: bytes)
+    }
+
     /// Parses a complete decimal value, rejecting malformed input and integer overflow.
     static func parseDecimal (_ str: ArraySlice<UInt8>) -> Int?
     {

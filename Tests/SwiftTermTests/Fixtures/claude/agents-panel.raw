@@ -1,0 +1,71 @@
+  older transcript line 1
+  older transcript line 2
+  older transcript line 3
+  older transcript line 4
+  older transcript line 5
+  older transcript line 6
+  older transcript line 7
+  older transcript line 8
+  older transcript line 9
+  older transcript line 10
+  older transcript line 11
+  older transcript line 12
+  older transcript line 13
+  older transcript line 14
+  older transcript line 15
+  older transcript line 16
+  older transcript line 17
+  older transcript line 18
+  older transcript line 19
+  older transcript line 20
+  older transcript line 21
+  older transcript line 22
+  older transcript line 23
+  older transcript line 24
+  older transcript line 25
+  older transcript line 26
+  older transcript line 27
+  older transcript line 28
+  older transcript line 29
+  older transcript line 30
+  older transcript line 31
+  older transcript line 32
+  older transcript line 33
+  older transcript line 34
+  older transcript line 35
+  older transcript line 36
+  older transcript line 37
+  older transcript line 38
+  older transcript line 39
+  older transcript line 40
+[H[J  verdict, and the vault handoff update waits on
+  the commit hash. The stress-test ledger so
+  far, for the digest at the end:
+
+  - Round 1: 7 concerns, 3 flags. Patched into
+    the wire section (record renamed to
+    WorkspaceRecord, fullTraffic on
+    newWorkspace, the newSession selector
+    written out, PrepInfo.log), the model and
+    flows (general's pathless workspace zero,
+    ⌃⌥N there starts a session), the worktree
+    section (preparing session holds its final
+    path, queue and layout keyed on the common
+    dir), the failure table (mechanical discard
+    guard, no rename retry), the file structure
+    (git and gh run outside the login shell with
+    an explicit environment, gh JSON decoded by
+    field), and the acceptance criteria and
+    tasks (panel ⌘K split across slices 1 and 3,
+    environment and guard tests).
+
+✻ Waiting for 1 background agent to finish
+
+────────────────────────────────────────────────
+❯ 
+────────────────────────────────────────────────
+  ⏵⏵ bypass permissions on · 1 monitor · ← 2 …
+
+  ⏺ main
+  ◯ deep-reasoner  R… 3m 44s · ↓ 114.2k tokens
+  ⧉  automatic-workspaces

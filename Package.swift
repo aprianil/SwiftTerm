@@ -67,7 +67,8 @@ let targets: [Target] = [
         path: "Tests/SwiftTermTests",
         resources: [
             .copy("Fixtures/xterm-ghostty.infocmp"),
-            .copy("Fixtures/swifterm-terminfo.infocmp")
+            .copy("Fixtures/swifterm-terminfo.infocmp"),
+            .copy("Fixtures/claude")
         ]
     )
 ] + buildInfoTargets
@@ -135,7 +136,8 @@ let targets: [Target] = [
         path: "Tests/SwiftTermTests",
         resources: [
             .copy("Fixtures/xterm-ghostty.infocmp"),
-            .copy("Fixtures/swifterm-terminfo.infocmp")
+            .copy("Fixtures/swifterm-terminfo.infocmp"),
+            .copy("Fixtures/claude")
         ]
     )
 ] + benchmarkTargets + buildInfoTargets
