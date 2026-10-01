@@ -1263,6 +1263,19 @@ open class Terminal {
 
     var snapshotSavedBidiPrivateModes: [Int: Bool] { savedBidiPrivateModes }
 
+    /// What a restore has to clear and no ordinary sequence clears.
+    func snapshotResetForRestore() {
+        terminalTitleStack = []
+        terminalIconStack = []
+        hostCurrentDirectory = nil
+        hostCurrentDocument = nil
+        savedBidiPrivateModes.removeAll()
+        activeHyperlink = nil
+        // The rows that follow are printed, and a line-drawing set left
+        // active would translate them.
+        snapshotSetCharsets(level: 0, designated: [nil, nil, nil, nil], current: nil)
+    }
+
     // Because data might not be complete, we need to put back data that we read to process on
     // a future read.  To prepare for reading, on every call to parse, the prepare method is
     // given the new ArraySlice to read from.

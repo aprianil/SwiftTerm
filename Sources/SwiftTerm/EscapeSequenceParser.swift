@@ -293,7 +293,10 @@ public class EscapeSequenceParser {
         // controls: the oscPut loop below already takes them as payload, so
         // the table has to agree or the same title parses two ways depending
         // on where a read happened to cut it (the 0x9c in "✳" ended the
-        // string when it was the first byte of a read).
+        // string when it was the first byte of a read). This is xterm's
+        // behaviour in UTF-8 mode, and it means an 8-bit ST (0x9c) no longer
+        // ends an OSC or APC; ESC \ and BEL do. DCS and SOS/PM/APC-ignore
+        // strings carry no text and still end on it.
         table.add (codes: r (low: 0x80, high: 0xa0), state: .oscString, action: .oscPut, next: .oscString)
         table.add (codes: r (low: 0x80, high: 0xa0), state: .apcString, action: .oscPut, next: .apcString)
         return TransitionTable(table.table)
@@ -365,6 +368,9 @@ public class EscapeSequenceParser {
     /// True when the sequence in progress outgrew `maximumPendingBytes`. Its
     /// bytes are no longer kept, and a snapshot writes it as abandoned.
     private(set) var pendingOverflow = false
+    /// Set by a restore: the next sequence opened from ground state counts
+    /// as one that outgrew the cap, as it had on the terminal snapshotted.
+    var abandonNextSequence = false
     static let maximumPendingBytes = 64 * 1024
     var printStateReset: () -> () = {  }
     
@@ -605,7 +611,8 @@ public class EscapeSequenceParser {
         case 104:  terminal.oscResetColor(data)
         case 112:
             terminal.programSetCursorColor = false
-            terminal.tdel?.setCursorColor(source: terminal, color: nil)
+            // The setter tells the delegate.
+            terminal.cursorColor = nil
         case 133:  terminal.oscSemanticPrompt(data)
         case 777:  terminal.oscNotification(data)
         case 1337: terminal.osciTerm2(data)
@@ -674,6 +681,7 @@ public class EscapeSequenceParser {
         activeDcsHandler = nil
         pendingBytes.removeAll()
         pendingOverflow = false
+        abandonNextSequence = false
         printStateReset()
     }
 
@@ -960,6 +968,11 @@ public class EscapeSequenceParser {
                     pendingBytes.removeAll(keepingCapacity: true)
                     pendingOverflow = false
                     pendingCarried = false
+                }
+                if abandonNextSequence && currentState == .ground {
+                    abandonNextSequence = false
+                    pendingOverflow = true
+                    pendingCarried = true
                 }
             } else if action == .execute {
                 // A control inside a sequence ran just now and left the

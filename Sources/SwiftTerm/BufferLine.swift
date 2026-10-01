@@ -394,7 +394,10 @@ public final class BufferLine: CustomDebugStringConvertible {
     {
         for i in (0..<dataSize).reversed() {
             if data [i].code != 0 {
-                return i + Int(data[i].width)
+                // A wide cell in the last column (an insert can push one
+                // there) must not count a column the line does not have: the
+                // reflow indexes by this length.
+                return min(i + Int(data[i].width), dataSize)
             }
         }
         return 0

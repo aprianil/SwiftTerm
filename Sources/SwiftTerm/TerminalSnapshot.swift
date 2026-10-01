@@ -13,8 +13,7 @@
 //  The stream is an escape stream, so it restores through the ordinary
 //  parser into any Terminal, the one inside a TerminalView included:
 //
-//      a blank screen              the pen, the modes that change what a
-//                                  position means, both cleared
+//      a blank terminal            whatever the restoring one held
 //      bidi state                  before any row, so new rows inherit it
 //      normal buffer rows          oldest first, CR LF between, which
 //                                  scrolls the old ones into scrollback
@@ -35,15 +34,25 @@
 //      wrap            the cursor's line continues the one above
 //      pendingwrap     the cursor sits past the last column
 //      focus           focus reporting on, without the report ?1004h sends
+//      reset           title stacks, host directory, saved BiDi modes and
+//                      charsets back to a new terminal's
+//      abandon         the sequence that follows was cut off for its length
 //      bidi            the cursor's line's BiDi state
 //      saved           the buffer's saved cursor (DECSC), pen included
 //      charsets        G0 to G3, the shift level, the active table
 //      cells           a run of cells exactly as given, for the ones
 //                      printing cannot rebuild (below)
 //
-//  A live feed may carry these too, so each verb only reaches state a
-//  program can already reach with ordinary sequences, and each checks its
-//  arguments.
+//  A live feed may carry these too, so each checks its arguments and none
+//  can trap. They reach nothing a program could not already do to its own
+//  terminal: `cells` writes cells an insert or an erase can also leave (a
+//  wide character in the last column, a lone second half), not only ones
+//  printing would.
+//
+//  The stream is correct into a fresh terminal and into one that has been
+//  used, with these left as the used one had them, because nothing here can
+//  put them back: a ground, ink or cursor colour a program set there and the
+//  source's did not, and anything listed under "Not carried".
 //
 //  Rows are printed, with SGR only where the attribute changes, CHA over
 //  blank cells and ECH for erased ones. Printing is only used for a cell it
@@ -143,14 +152,6 @@ private func snapshotRowRange(of buffer: Buffer, rows: Int, includeScrollback: B
     let count = buffer.lines.count
     let top = min(max(buffer.yBase, 0), max(count - rows, 0))
     return (includeScrollback ? 0 : top)..<min(top + rows, count)
-}
-
-private func snapshotDefaultTabStops(cols: Int, width: Int) -> [Bool] {
-    var stops = [Bool](repeating: false, count: cols)
-    for index in stride(from: 0, to: cols, by: max(width, 1)) {
-        stops[index] = true
-    }
-    return stops
 }
 
 private func snapshotCursorStyleCode(_ style: CursorStyle) -> Int {
@@ -270,14 +271,25 @@ private struct SnapshotWriter {
         let alt = terminal.altBuffer
         out.reserveCapacity((includeScrollback ? normal.lines.count : rows) * (cols + 16) + 512)
 
-        // The contract is a fresh terminal, which needs none of this. It is
-        // here so that one which has only used its normal screen restores
-        // too: a blank screen, an empty scrollback, and the four modes that
-        // would bend the positions below. It is not ESC c, which rebuilds
-        // the normal buffer from the options and would hand a terminal whose
-        // scrollback was turned off one that reflows.
-        put("\u{1b}[m\u{1b}[4l\u{1b}[?6l\u{1b}[?69l\u{1b}[r\u{1b}[H\u{1b}[2J\u{1b}[3J")
+        // A fresh terminal needs none of this opening. It is here so that a
+        // terminal which has already shown something restores to the same
+        // state: CAN drops a sequence it was inside, ?1047h then ?1047l lands
+        // on the normal buffer with the alternate one emptied, and the rest
+        // puts back whatever would bend the positions below. It is not a
+        // full reset, which rebuilds the normal buffer from the options and
+        // would hand a terminal whose scrollback was turned off one that
+        // reflows. What it cannot put back is listed in the file header.
+        out.append(0x18)
+        put("\u{1b}[?1047h\u{1b}[?1047l\u{1b}[m\u{1b}[4l\u{1b}[?6l\u{1b}[?7h\u{1b}[?45l\u{1b}]8;;\u{1b}\\")
+        // The margins and the region back to the whole screen, or the rows
+        // below would scroll inside them.
+        put("\u{1b}[?69h\u{1b}[1;")
+        put(cols)
+        put("s\u{1b}[?69l\u{1b}[r")
+        verb("reset")
+        // Before the erase, which stamps each row with the terminal's state.
         writeBidiState()
+        put("\u{1b}[H\u{1b}[2J\u{1b}[3J")
 
         writeLines(of: normal, includeScrollback: includeScrollback)
 
@@ -295,7 +307,7 @@ private struct SnapshotWriter {
                 writeLines(of: alt, includeScrollback: includeScrollback)
                 writeBufferState(alt, alternate: true, cleared: false)
                 put("\u{1b}[?47l")
-            } else if bufferHasState(alt, alternate: true) {
+            } else {
                 // Empty, but its tab stops, keyboard flags and saved cursor
                 // outlive the clear that ?1047l does on the way out.
                 leaveRow()
@@ -315,9 +327,7 @@ private struct SnapshotWriter {
         writeCharsets()
 
         put(terminal.cursorHidden ? "\u{1b}[?25l" : "\u{1b}[?25h")
-        if terminal.synchronizedOutputActive {
-            put("\u{1b}[?2026h")
-        }
+        put(terminal.synchronizedOutputActive ? "\u{1b}[?2026h" : "\u{1b}[?2026l")
         writeTail()
     }
 
@@ -766,29 +776,7 @@ private struct SnapshotWriter {
 
     // MARK: Buffer state
 
-    private func savedCursorIsDefault(_ buffer: Buffer) -> Bool {
-        buffer.savedX == 0 && buffer.savedY == 0 && buffer.savedAttr == CharData.defaultAttr
-            && buffer.savedCharset == nil && !buffer.savedOriginMode && !buffer.savedMarginMode
-            && !buffer.savedWraparound && !buffer.savedReverseWraparound
-    }
 
-    private func tabStopsAreDefault(_ buffer: Buffer) -> Bool {
-        let defaults = snapshotDefaultTabStops(cols: cols, width: terminal.tabStopWidth)
-        let stops = buffer.tabStops
-        for column in 0..<cols {
-            if (column < stops.count && stops[column]) != defaults[column] {
-                return false
-            }
-        }
-        return true
-    }
-
-    private func bufferHasState(_ buffer: Buffer, alternate: Bool) -> Bool {
-        let keyboard = terminal.snapshotKeyboardMode(alternate: alternate)
-        return keyboard.flags != 0 || !keyboard.stack.isEmpty
-            || !savedCursorIsDefault(buffer) || !tabStopsAreDefault(buffer)
-            || buffer.x != 0 || buffer.y != 0
-    }
 
     /// Written while `buffer` is the active one, after its rows, with origin
     /// and margin mode still off so that every position below is absolute.
@@ -797,29 +785,24 @@ private struct SnapshotWriter {
     ///   out, which resets its margins, region and cursor anyway.
     private mutating func writeBufferState(_ buffer: Buffer, alternate: Bool, cleared: Bool) {
         if !cleared {
-            if buffer.marginLeft != 0 || buffer.marginRight != cols - 1 {
-                // DECSLRM is only DECSLRM while margin mode is on.
-                put("\u{1b}[?69h\u{1b}[")
-                put(buffer.marginLeft + 1)
-                out.append(0x3b)
-                put(buffer.marginRight + 1)
-                put("s\u{1b}[?69l")
-            }
-            if buffer.scrollTop != 0 || buffer.scrollBottom != rows - 1 {
-                put("\u{1b}[")
-                put(buffer.scrollTop + 1)
-                out.append(0x3b)
-                put(buffer.scrollBottom + 1)
-                out.append(0x72) // r
-            }
+            // Everything here is written whether or not it is the default:
+            // the restoring terminal may not be at the default.
+            // DECSLRM is only DECSLRM while margin mode is on.
+            put("\u{1b}[?69h\u{1b}[")
+            put(buffer.marginLeft + 1)
+            out.append(0x3b)
+            put(buffer.marginRight + 1)
+            put("s\u{1b}[?69l\u{1b}[")
+            put(buffer.scrollTop + 1)
+            out.append(0x3b)
+            put(buffer.scrollBottom + 1)
+            out.append(0x72) // r
         }
-        if !tabStopsAreDefault(buffer) {
-            put("\u{1b}[3g")
-            let stops = buffer.tabStops
-            for column in 0..<min(cols, stops.count) where stops[column] {
-                csi(column + 1, "G")
-                put("\u{1b}H")
-            }
+        put("\u{1b}[3g")
+        let stops = buffer.tabStops
+        for column in 0..<min(cols, stops.count) where stops[column] {
+            csi(column + 1, "G")
+            put("\u{1b}H")
         }
         // Empty the keyboard stack, then rebuild it by pushing through it:
         // the first entry is set, each later one pushes the one before it.
@@ -833,7 +816,7 @@ private struct SnapshotWriter {
             put(flags)
             out.append(0x75) // u
         }
-        if !savedCursorIsDefault(buffer) {
+        do {
             if isSGRExpressible(buffer.savedAttr) {
                 setPen(buffer.savedAttr)
             }
@@ -869,9 +852,6 @@ private struct SnapshotWriter {
 
     private mutating func writeCharsets() {
         let charsets = terminal.snapshotCharsets
-        if terminal.gLevel == 0 && charsets.current == nil && charsets.designated.allSatisfy({ $0 == nil }) {
-            return
-        }
         put("\u{1b}_swiftterm-snapshot;charsets;")
         put(Int(terminal.gLevel))
         for index in 0..<4 {
@@ -958,18 +938,12 @@ private struct SnapshotWriter {
             putOscText(title)
             put("\u{1b}\\\u{1b}[22;1t")
         }
-        // A terminal nothing has titled stays untitled: an empty OSC 2
-        // would tell the restoring view to clear the title it shows.
-        if !terminal.terminalTitle.isEmpty || !terminal.terminalTitleStack.isEmpty {
-            put("\u{1b}]2;")
-            putOscText(terminal.terminalTitle)
-            put("\u{1b}\\")
-        }
-        if !terminal.iconTitle.isEmpty || !terminal.terminalIconStack.isEmpty {
-            put("\u{1b}]1;")
-            putOscText(terminal.iconTitle)
-            put("\u{1b}\\")
-        }
+        // Written even when empty: the restoring terminal may have a title.
+        put("\u{1b}]2;")
+        putOscText(terminal.terminalTitle)
+        put("\u{1b}\\\u{1b}]1;")
+        putOscText(terminal.iconTitle)
+        put("\u{1b}\\")
         if let directory = terminal.hostCurrentDirectory {
             put("\u{1b}]7;")
             putOscText(directory)
@@ -1002,6 +976,8 @@ private struct SnapshotWriter {
             out.append(contentsOf: color.formatAsXcolor().utf8)
             put("\u{1b}\\")
         }
+        // The palette back to the embedder's, then what the program changed.
+        put("\u{1b}]104\u{1b}\\")
         let current = terminal.ansiColors
         let defaults = terminal.defaultAnsiColors
         for index in 0..<min(current.count, defaults.count) where current[index] != defaults[index] {
@@ -1029,8 +1005,12 @@ private struct SnapshotWriter {
             return
         }
         // Too long to carry. Open a sequence of the same kind with nothing
-        // in it, so the rest of the payload is swallowed as it would have
-        // been and its end does nothing.
+        // in it, marked as abandoned, so the rest of the payload is
+        // swallowed and its end does nothing. The source goes on to apply
+        // its copy (a 70 KiB title is still a title), so this is the one
+        // place the two part: the restored terminal never sees the effect
+        // of a sequence that was more than 64 KiB in when it was cut.
+        verb("abandon")
         switch parser.currentState {
         case .oscString:
             put("\u{1b}]X")
@@ -1076,6 +1056,10 @@ extension Terminal {
             buffer.x = cols
         case "focus":
             sendFocus = true
+        case "reset":
+            snapshotResetForRestore()
+        case "abandon":
+            parser.abandonNextSequence = true
         case "bidi":
             if let bits = snapshotInt(arguments.first), row >= 0, row < buffer.lines.count {
                 buffer.lines[row].bidiState = BidiPresentationState(snapshotBits: bits)

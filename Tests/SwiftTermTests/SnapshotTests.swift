@@ -109,7 +109,7 @@ struct SnapshotTests {
     /// widths, clusters, SGR, cursor moves, erases, inserts and deletes,
     /// scroll regions, the alternate screen, saved cursors, links, titles
     /// and modes.
-    static func generatedStream(seed: UInt64, cols: Int, rows: Int) -> [UInt8] {
+    static func generatedStream(seed: UInt64, cols: Int, rows: Int, groundAndInk: Bool = true) -> [UInt8] {
         var random = SnapshotRandom(state: seed)
         var text = ""
         let steps = 30 + random.below(50)
@@ -174,8 +174,9 @@ struct SnapshotTests {
             case 36:
                 text += random.pick(["\u{1b}(0", "\u{1b}(B", "\u{1b})0", "\u{e}", "\u{f}", "\u{1b}n", "\u{1b}[62\"p", "\u{1b}[65\"p"])
             case 37:
-                text += random.pick(["\u{1b}]4;1;rgb:ff/00/00\u{7}", "\u{1b}]104\u{7}", "\u{1b}]10;#102030\u{7}",
-                                     "\u{1b}]11;rgb:00/00/40\u{1b}\\", "\u{1b}]12;#ffffff\u{7}", "\u{1b}]112\u{7}"])
+                let colours = ["\u{1b}]4;1;rgb:ff/00/00\u{7}", "\u{1b}]104\u{7}", "\u{1b}]10;#102030\u{7}",
+                               "\u{1b}]11;rgb:00/00/40\u{1b}\\", "\u{1b}]12;#ffffff\u{7}", "\u{1b}]112\u{7}"]
+                text += groundAndInk ? random.pick(colours) : colours[random.below(2)]
             case 38:
                 text += random.pick(["\u{1b}[?1s", "\u{1b}[?2500;2501s", "\u{1b}[?2500;2501r", "\u{1b}[>2t", "\u{1b}[>2T"])
             default:
@@ -496,10 +497,58 @@ struct SnapshotTests {
         withExtendedLifetime((sourceDelegate, delegate, secondDelegate)) {}
     }
 
+    /// A terminal that has already been used restores to the source too:
+    /// the app restores a second snapshot into a pane that showed the first.
+    /// The used one is left on whatever a random stream left it on, cut in
+    /// the middle of a sequence, and on the alternate screen every other
+    /// time. Its ground, ink and cursor colours are the one thing a restore
+    /// cannot take back, so its stream sets none.
+    @Test(arguments: Array(0..<60))
+    func testRestoreIntoAUsedTerminal(seed: Int) {
+        let shape = Shape(cols: 20, rows: 26, scrollback: 30)
+        let used = SnapshotTests.generatedStream(seed: UInt64(3000 + seed), cols: 20, rows: 26, groundAndInk: false)
+        let stream = SnapshotTests.generatedStream(seed: UInt64(4000 + seed), cols: 20, rows: 26)
+        for cut in [stream.count, stream.count / 2, stream.count / 3] {
+            let (source, sourceDelegate) = SnapshotTests.makeTerminal(shape)
+            source.feed(buffer: stream[0..<cut])
+            let (restored, delegate) = SnapshotTests.makeTerminal(shape)
+            restored.feed(buffer: used[0..<(used.count * 2 / 3)])
+            restored.feed(text: seed % 2 == 0 ? "\u{1b}[?1049h\u{1b}[?69h\u{1b}[3;8s\u{1b}[5;9rvim\u{1b}]0;half a tit" : "\u{1b}[?69h\u{1b}[3;8s\u{1b}[38;5")
+            delegate.sends = 0
+            restored.feed(byteArray: source.snapshot(includeScrollback: true))
+            #expect(delegate.sends == 0)
+            #expect(restored.digest(includeScrollback: true) == source.digest(includeScrollback: true),
+                    "seed \(seed) cut \(cut):\(SnapshotTests.firstDifference(restored, source, includeScrollback: true))")
+            restored.feed(buffer: stream[cut...])
+            source.feed(buffer: stream[cut...])
+            #expect(restored.digest(includeScrollback: true) == source.digest(includeScrollback: true),
+                    "seed \(seed) cut \(cut), after the rest:\(SnapshotTests.firstDifference(restored, source, includeScrollback: true))")
+            withExtendedLifetime(sourceDelegate) {}
+        }
+    }
+
+    /// A wide character pushed into the last column by an insert used to
+    /// trap the reflow when the terminal got narrower. A snapshot carries
+    /// that cell faithfully, so a restored pane has to survive the resize.
+    @Test func testWideCellInTheLastColumnSurvivesNarrowing() {
+        let shape = Shape(cols: 10, rows: 5, scrollback: 20)
+        let (source, sourceDelegate) = SnapshotTests.makeTerminal(shape)
+        source.feed(text: "\u{1b}[3;1Habcdefgh漢\u{1b}[3;1H\u{1b}[1@")
+        let (restored, delegate) = SnapshotTests.makeTerminal(shape)
+        restored.feed(byteArray: source.snapshot(includeScrollback: true))
+        #expect(restored.digest(includeScrollback: true) == source.digest(includeScrollback: true))
+        source.resize(cols: 4, rows: 5)
+        restored.resize(cols: 4, rows: 5)
+        #expect(restored.digest(includeScrollback: true) == source.digest(includeScrollback: true))
+        withExtendedLifetime((sourceDelegate, delegate)) {}
+    }
+
     /// A sequence the parser has been inside for more than 64 KiB is not
     /// carried: the restored parser is left inside an empty sequence of the
-    /// same kind, so the rest of the payload is swallowed and what follows
-    /// it parses.
+    /// same kind, marked abandoned, so the digests agree at the restore, the
+    /// rest of the payload is swallowed and what follows it parses. The
+    /// source still applies its copy, so a sequence that leaves state (a
+    /// title that long) is the one thing the restored terminal misses.
     @Test func testOversizedSequenceIsAbandoned() {
         let shape = Shape(cols: 48, rows: 37, scrollback: 100)
         let openers: [String] = ["\u{1b}]52;c;", "\u{1b}_G", "\u{1b}Pq", "\u{1b}^"]
@@ -514,6 +563,8 @@ struct SnapshotTests {
             let (restored, delegate) = SnapshotTests.makeTerminal(shape)
             restored.feed(byteArray: snapshot)
             #expect(restored.parser.currentState == source.parser.currentState)
+            #expect(restored.digest(includeScrollback: false) == source.digest(includeScrollback: false),
+                    "the embedder's check at the restore: \(SnapshotTests.printable([UInt8](opener.utf8)[...]))")
             let rest = "AAAA\u{1b}\\after\u{1b}[1;31mwards"
             source.feed(text: rest)
             restored.feed(text: rest)
@@ -552,6 +603,7 @@ struct SnapshotTests {
             "cells;q;d;0;0;n;161", "cells;d;d;999;0;n;161", "cells;d;d;0;77;n;161", "cells;d;d;0;0;q;161",
             "cells;t1000000;p999;0;0;n;161", "cells;d;d;0;0;n;161,161,161,161,161,161,161,161,161,161,161,161,161",
             "cells;d;d;0;0;n;21f468.200d.1f469,0,2,1..,1.61", "cells;d;d;0;0;n;161.62.63.64", "pendingwrap;;;", "focus;1",
+            "reset;9", "abandon", "abandon;;",
         ]
         for body in bodies {
             terminal.feed(text: "\u{1b}[2;9H\u{1b}_swiftterm-snapshot;\(body)\u{1b}\\ok")
