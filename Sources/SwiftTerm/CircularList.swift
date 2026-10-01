@@ -341,6 +341,9 @@ internal class CircularBufferLineList {
         array[index]?.clear(with: clearAttribute)
         array[index]?.destroySemanticState()
         array[index]?.isWrapped = false
+        // A line that scrolls in is single width, whatever the one whose
+        // storage it took over was.
+        array[index]?.renderMode = .single
         onLineRecycled?(hadImages)
         //array [index] = makeEmpty! (-1)
     }

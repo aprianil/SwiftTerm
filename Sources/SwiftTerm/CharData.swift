@@ -208,10 +208,15 @@ public struct TinyAtom {
         lock.lock()
         defer { lock.unlock() }
 
-        guard lastUsed < UInt16.max - 1 else {
+        // Codes are handed out in order and, once the range has been walked,
+        // released ones are handed out again. Without the second half a
+        // process stopped making links for good after its 65,534th.
+        guard map.count < Int(UInt16.max) - 1 else {
             return nil
         }
-        lastUsed += 1
+        repeat {
+            lastUsed = lastUsed >= UInt16.max - 1 ? 1 : lastUsed + 1
+        } while map [lastUsed] != nil
         let code = lastUsed
 
         map [code] = value
