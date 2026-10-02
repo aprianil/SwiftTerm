@@ -218,6 +218,8 @@ open class TerminalView: NSView, NSTextInputClient, NSUserInterfaceValidations, 
     var debug: TerminalDebugView?
     var pendingDisplay: Bool = false
     var lastDisplayUpdateNs: UInt64 = 0
+    var feedStartedNs: UInt64 = 0
+    var drawingAtFrameOpen = false
     var textBlinkVisible = true
     var textBlinkTimer: Timer?
     var textBlinkObservers: [(NotificationCenter, NSObjectProtocol)] = []
@@ -1590,8 +1592,15 @@ open class TerminalView: NSView, NSTextInputClient, NSUserInterfaceValidations, 
         NSGraphicsContext.current?.cgContext
     }
     
+    /// In a window, with a size, and not hidden: a view whose frames a
+    /// person could be looking at, which is the only kind `DrawProbe` counts
+    /// and the only kind a frame's open draws for.
+    var mayBeSeen: Bool {
+        window != nil && bounds.height > 0 && !isHiddenOrHasHiddenAncestor
+    }
+
     override public func draw (_ dirtyRect: NSRect) {
-        DrawProbe.drew(torn: terminal.synchronizedOutputActive)
+        DrawProbe.drew(torn: terminal.synchronizedOutputActive && !drawingAtFrameOpen)
 #if canImport(MetalKit)
         if metalView != nil {
             return

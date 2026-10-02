@@ -895,19 +895,42 @@ extension TerminalView {
     /// And a frame's open first draws anything already marked dirty: from here
     /// until the close the buffer is a half-drawn screen, so a draw the run
     /// loop gets to later would show the application's picture torn in two.
+    ///
+    /// Both only on the main thread, where the view may be touched; a feed
+    /// from elsewhere keeps the tick it always had.
     public func synchronizedOutputChanged (source: Terminal, active: Bool)
     {
+        let onMain = Thread.isMainThread
         if active {
             #if os(macOS)
-            if window != nil, needsDisplay { displayIfNeeded() }
+            if onMain, mayBeSeen {
+                // The flag is already set, and nothing of the new frame has
+                // been written yet: this draw is of the whole old picture.
+                drawingAtFrameOpen = true
+                if needsDisplay { displayIfNeeded() }
+                // AppKit may already have handed the dirty rect to the
+                // layer, which then draws at whatever commit comes next,
+                // possibly inside this frame (measured 2026-10-02, a test
+                // window on a locked screen: 4 frames of 40 drawn that way,
+                // 22 ms after their update).
+                layer?.displayIfNeeded()
+                drawingAtFrameOpen = false
+            }
             #endif
             return
         }
         #if os(macOS)
-        if window != nil, bounds.height > 0 { DrawProbe.frameClosed() }
+        if onMain, mayBeSeen { DrawProbe.frameClosed() }
         #endif
         updateScroller()
-        if DispatchTime.now().uptimeNanoseconds &- lastDisplayUpdateNs >= 16_670_000 {
+        // A feed that has been parsing for a tick already is a replay, not
+        // frames anyone watches one by one: everything it draws before it
+        // returns lands in one commit. It keeps the tick (measured on a
+        // 1.8 MB replay of 1166 frames: 109.8 ms before any of this, 127.6
+        // and 8 draws with an early update every tick, 111.7 and 1 draw
+        // with this).
+        let now = DispatchTime.now().uptimeNanoseconds
+        if onMain, now &- lastDisplayUpdateNs >= 16_670_000, now &- feedStartedNs < 16_670_000 {
             updateDisplay()
         } else {
             queuePendingDisplay()
@@ -2998,7 +3021,9 @@ extension TerminalView {
             terminalDelegate?.rangeChanged (source: self, startY: rowStart, endY: rowEnd)
         }
         lastDisplayUpdateNs = DispatchTime.now().uptimeNanoseconds
-        DrawProbe.presented()
+        #if os(macOS)
+        if mayBeSeen { DrawProbe.presented() }
+        #endif
 
         terminal.clearUpdateRange ()
 
@@ -3518,6 +3543,7 @@ extension TerminalView {
     /// Sends data to the terminal emulator for interpretation, this can be invoked from a background thread
     public func feed (byteArray: ArraySlice<UInt8>)
     {
+        feedStartedNs = DispatchTime.now().uptimeNanoseconds
         feedPrepare()
         terminal.feed (buffer: byteArray)
         feedFinish()
