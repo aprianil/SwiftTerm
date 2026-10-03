@@ -2258,8 +2258,13 @@ extension TerminalView {
             return (first..<(last + 1), found.fill, found.rule)
         }
         /// A row with nothing drawn on it: no glyph but blanks, no background.
+        /// A row the embedder hides (`hiddenRows`) draws nothing, so it is
+        /// blank here whatever the program wrote on it: a block beside it
+        /// keeps its air on the other side (sidealong, 2026-10-03, the
+        /// queued message's hint row, hidden and redrawn by the embedder).
         func isBlank (row r: Int) -> Bool {
             guard r >= 0, r < displayBuffer.lines.count else { return false }
+            if !hiddenRows.isEmpty, hiddenRows.contains(r - bufferOffset) { return true }
             let line = displayBuffer.lines [r]
             for c in 0..<min(line.count, terminal.cols) {
                 let cell = line [c]

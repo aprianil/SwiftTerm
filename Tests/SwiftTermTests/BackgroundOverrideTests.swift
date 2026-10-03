@@ -131,7 +131,7 @@ final class BackgroundBlockPaddingTests: XCTestCase {
     private let grey = Attribute.Color.ansi256(code: 237)
 
     /// Row 0 blank, row 1 the block, row 2 blank, row 3 text.
-    private func makeView (rowAbove: String = "") -> TerminalView {
+    private func makeView (rowAbove: String = "", rowBelow: String = "") -> TerminalView {
         _ = NSApplication.shared
         var options = TerminalOptions.default
         options.cols = 40
@@ -143,7 +143,7 @@ final class BackgroundBlockPaddingTests: XCTestCase {
         view.backgroundColorOverrides = [grey: .blue]
         view.backgroundRules = [grey: .red]
         view.backgroundRuleWidth = 2
-        view.feed(byteArray: ArraySlice(Array("\(rowAbove)\r\n\u{1b}[48;5;237m echoed words                    \u{1b}[49m\r\n\r\ntext\r\n".utf8)))
+        view.feed(byteArray: ArraySlice(Array("\(rowAbove)\r\n\u{1b}[48;5;237m echoed words                    \u{1b}[49m\r\n\(rowBelow)\r\ntext\r\n".utf8)))
         return view
     }
 
@@ -197,6 +197,27 @@ final class BackgroundBlockPaddingTests: XCTestCase {
         let midX = Int(cell.width * 30 * scale)
         XCTAssertLessThan(rep.colorAt(x: midX, y: aboveY)!.blueComponent, 0.5, "a row with words on it is not drawn over")
         XCTAssertLessThan(rep.colorAt(x: midX, y: belowY)!.blueComponent, 0.5, "and the blank row below lends nothing, so the block has no air on one side alone")
+    }
+
+    /// The row pressed under the block is one the embedder hides: it
+    /// draws nothing, so it is blank, and the row on the block's other
+    /// side lends again. The hidden row itself draws no pad of its own; the
+    /// embedder that hid it paints what stands in for it.
+    func testAHiddenNeighbourCountsAsBlank () {
+        let view = makeView(rowBelow: "  ctrl+enter to send now")
+        view.backgroundBlockPadding = 6
+        let cell = view.cellDimension!
+        let scale = CGFloat(bitmap(of: view).pixelsWide) / view.bounds.width
+        let aboveY = Int((cell.height * 1 - 2) * scale)
+        let belowY = Int((cell.height * 2 + 2) * scale)
+        let midX = Int(cell.width * 30 * scale)
+        let tight = bitmap(of: view)
+        XCTAssertLessThan(tight.colorAt(x: midX, y: aboveY)!.blueComponent, 0.5, "words under the block: no air on either side")
+
+        view.hiddenRows = [2]
+        let hidden = bitmap(of: view)
+        XCTAssertGreaterThan(hidden.colorAt(x: midX, y: aboveY)!.blueComponent, 0.9, "hidden, the row under counts as blank and the row above lends")
+        XCTAssertLessThan(hidden.colorAt(x: midX, y: belowY)!.blueComponent, 0.5, "the hidden row draws no pad itself")
     }
 
     /// A block three rows tall with blank rows either side: the far side
