@@ -353,6 +353,11 @@ open class TerminalView: NSView, NSTextInputClient, NSUserInterfaceValidations, 
     var rowRenderCache: [Int: RowRenderCacheEntry] = [:]
     var rowRenderCacheSignature: RowRenderViewSignature? = nil
     var rowRenderCacheVisible: ClosedRange<Int>? = nil
+    /// The same built rows again, keyed by what the line shows rather than
+    /// where it is; see `cachedLineInfo(row:line:cols:)`. Dropped with
+    /// `rowRenderCache` and bounded by `rowRenderContentLimit`.
+    var rowRenderContentCache: [Int: [RowRenderContentEntry]] = [:]
+    var rowRenderContentCount: Int = 0
     /// Counters for the tests that assert the cache is actually reused.
     var rowRenderCacheHits: Int = 0
     var rowRenderCacheMisses: Int = 0

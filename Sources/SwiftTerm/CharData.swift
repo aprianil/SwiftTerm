@@ -293,6 +293,12 @@ public struct CharData: CustomDebugStringConvertible {
     // This contains an assigned key
     var payload: TinyAtom
     
+    /// Every field a renderer can read from the cell.
+    func rendersSame(as other: CharData) -> Bool {
+        code == other.code && width == other.width && payload.code == other.payload.code
+            && semanticContentCode == other.semanticContentCode && attribute == other.attribute
+    }
+
     // Kept in the byte that previously existed only for alignment, so OSC 133
     // semantic metadata does not increase the size of a terminal cell.
     private var semanticContentCode: UInt8

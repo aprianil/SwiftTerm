@@ -203,5 +203,61 @@ final class RowRenderCacheTests: XCTestCase {
         XCTAssertLessThanOrEqual(view.rowRenderCache.count, view.getTerminal().rows + 2,
                                  "the cache grew past the visible rows")
     }
+
+    /// A full-screen program's scroll, the way claude's agent view does it:
+    /// the alternate screen, every row rewritten in place, its words one
+    /// row further on. `first` is the first numbered row on the screen.
+    private func paintScreen (_ view: TerminalView, from first: Int, colour: Int = 31) {
+        let rows = view.getTerminal().rows
+        var text = "\u{1b}[?1049h\u{1b}[?2026h"
+        for row in 0..<rows {
+            let n = first + row
+            text += "\u{1b}[\(row + 1);1H\u{1b}[2K\u{1b}[38;2;153;153;153m│\u{1b}[39m line \(n) "
+            text += "\u{1b}[1mbold\u{1b}[22m \u{1b}[\(colour)mword\u{1b}[39m ▛▀▄ ──"
+        }
+        text += "\u{1b}[?2026l"
+        view.feed(byteArray: ArraySlice(Array(text.utf8)))
+    }
+
+    func testARepaintedScrollReusesTheRowsByWhatTheyShow () {
+        let view = makeView()
+        paintScreen(view, from: 1)
+        _ = pixels(of: view)
+        let before = view.rowRenderCacheStats
+        paintScreen(view, from: 4)
+        assertCacheIsInvisible(view, "a screen repainted three rows on")
+        let after = view.rowRenderCacheStats
+        // The draw in the assertion that reads the cache: three new rows,
+        // every other row seen a frame ago on another row.
+        XCTAssertLessThanOrEqual(after.rebuilt - before.rebuilt, 3,
+                                 "a repainted scroll rebuilt rows it had already built")
+    }
+
+    func testTheSameWordsInAnotherColourAreBuiltAgain () {
+        let view = makeView()
+        paintScreen(view, from: 1)
+        _ = pixels(of: view)
+        paintScreen(view, from: 2, colour: 32)
+        assertCacheIsInvisible(view, "the same words in green")
+    }
+
+    func testARepaintedScrollUnderASelectionDrawsTheSame () {
+        let view = makeView()
+        paintScreen(view, from: 1)
+        _ = pixels(of: view)
+        view.selectAll()
+        paintScreen(view, from: 3)
+        assertCacheIsInvisible(view, "a selection over a repainted scroll")
+    }
+
+    func testTheContentCacheStaysBounded () {
+        let view = makeView()
+        for first in stride(from: 1, to: 2000, by: 24) {
+            paintScreen(view, from: first)
+            _ = pixels(of: view)
+        }
+        XCTAssertLessThanOrEqual(view.rowRenderContentCount, max(256, 4 * view.getTerminal().rows),
+                                 "the content cache grew past its bound")
+    }
 }
 #endif

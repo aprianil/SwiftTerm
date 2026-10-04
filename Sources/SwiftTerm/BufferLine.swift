@@ -119,6 +119,37 @@ public final class BufferLine: CustomDebugStringConvertible {
         }
     }
 
+    /// A hash of everything a renderer draws from this line: its cells and
+    /// the line-wide state that changes how they are shown. Equal lines
+    /// hash equal; `rendersSame(as:)` is the test that decides.
+    func renderHash() -> Int {
+        var hasher = Hasher()
+        hasher.combine(dataSize)
+        hasher.combine(isWrapped)
+        for i in 0..<dataSize {
+            let cell = data[i]
+            hasher.combine(cell.code)
+            hasher.combine(cell.attribute)
+        }
+        return hasher.finalize()
+    }
+
+    /// Whether `other` would draw exactly as this line does: the same cells
+    /// (character, width, link, attribute, semantic role) and the same
+    /// line-wide state. A line carrying images never matches, since an
+    /// image is drawn from the line object rather than from its cells.
+    func rendersSame(as other: BufferLine) -> Bool {
+        guard dataSize == other.dataSize, isWrapped == other.isWrapped,
+              renderMode == other.renderMode, bidiState == other.bidiState,
+              images == nil, other.images == nil else {
+            return false
+        }
+        for i in 0..<dataSize where !data[i].rendersSame(as: other.data[i]) {
+            return false
+        }
+        return true
+    }
+
     public func getData() -> [CharData] {
         Array(data[0..<dataSize])
     }

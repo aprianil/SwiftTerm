@@ -199,8 +199,18 @@ private func cachedCTLine(_ text: NSAttributedString) -> CTLine {
     return line
 }
 
+/// A row's shaped lines and their runs, made on the first draw of a built
+/// row and kept with it: a class, so every cache holding the row shares the
+/// one made. Shaping is most of a draw that reuses its rows (measured at
+/// 48x67 on claude's agent view: 1.55 ms of a 3.05 ms frame, every row
+/// built before).
+final class PreparedSegments {
+    var value: [(segment: ViewLineSegment, ctLine: CTLine, runs: [PreparedRun])]?
+}
+
 // Holds the information used to render a line
 struct ViewLineInfo {
+    let prepared = PreparedSegments()
     // Contains the generated segments for this line
     var segments: [ViewLineSegment]
     // contains an array of (image, column where the image was found)
@@ -251,6 +261,32 @@ final class RowRenderCacheEntry {
         self.line = line
         self.signature = signature
         self.info = info
+    }
+}
+
+/// A built row kept beside a copy of the line it was built from, so a line
+/// with the same cells elsewhere on the screen can take it.
+final class RowRenderContentEntry {
+    let line: BufferLine
+    let cols: Int
+    let selection: Range<Int>?
+    let implicitLinks: [Range<Int>]
+    let hoverLink: Range<Int>?
+    let info: ViewLineInfo
+
+    init (line: BufferLine, signature: RowRenderSignature, info: ViewLineInfo) {
+        self.line = BufferLine(from: line)
+        self.cols = signature.cols
+        self.selection = signature.selection
+        self.implicitLinks = signature.implicitLinks
+        self.hoverLink = signature.hoverLink
+        self.info = info
+    }
+
+    func matches (_ other: BufferLine, _ signature: RowRenderSignature) -> Bool {
+        cols == signature.cols && selection == signature.selection
+            && implicitLinks == signature.implicitLinks && hoverLink == signature.hoverLink
+            && line.rendersSame(as: other)
     }
 }
 
@@ -1592,8 +1628,15 @@ extension TerminalView {
     /// and the palette come through `resetCaches` and `colorsChanged`.
     func invalidateRowRenderCache ()
     {
-        rowRenderCache.removeAll (keepingCapacity: true)
+        clearRowRenderCache()
         rowRenderCacheSignature = nil
+    }
+
+    func clearRowRenderCache ()
+    {
+        rowRenderCache.removeAll (keepingCapacity: true)
+        rowRenderContentCache.removeAll (keepingCapacity: true)
+        rowRenderContentCount = 0
     }
 
     /// Whether the modifier key currently decides how a link is drawn.
@@ -1637,7 +1680,7 @@ extension TerminalView {
         let signature = rowRenderViewSignature(cols: cols)
         if signature != rowRenderCacheSignature {
             rowRenderCacheSignature = signature
-            rowRenderCache.removeAll (keepingCapacity: true)
+            clearRowRenderCache()
             return
         }
         guard let previous, previous != visible else { return }
@@ -1706,9 +1749,38 @@ extension TerminalView {
             rowRenderCacheHits &+= 1
             return entry.info
         }
+        // A program that redraws its whole screen to scroll it (an agent
+        // view, a pager, an editor) writes every row's words onto another
+        // row: each line is new to its row, but its cells are what another
+        // row showed a frame ago. Keyed by content, that row's build is
+        // reused. Only for a row that is its own bidi paragraph, whose
+        // layout reads nothing but the line; a wrapped row's reads its
+        // neighbours.
+        let buffer = terminal.displayBuffer
+        let ownParagraph = !line.isWrapped
+            && (row + 1 >= buffer.lines.count || !buffer.lines[row + 1].isWrapped)
+        let byContent = ownParagraph && line.images == nil
+        let key = byContent ? line.renderHash() : 0
+        if byContent, let entry = rowRenderContentCache[key]?.first(where: { $0.matches(line, signature) }) {
+            rowRenderCache[row] = RowRenderCacheEntry(line: line, signature: signature, info: entry.info)
+            rowRenderCacheHits &+= 1
+            return entry.info
+        }
         let info = buildAttributedString(row: row, line: line, cols: cols)
         rowRenderCache[row] = RowRenderCacheEntry(line: line, signature: signature, info: info)
         rowRenderCacheMisses &+= 1
+        if byContent {
+            // Bounded by a few screens: past that the oldest rows are the
+            // ones least likely to come back, and a clear is cheaper than
+            // an eviction order.
+            if rowRenderContentCount >= max(256, 4 * terminal.rows) {
+                rowRenderContentCache.removeAll (keepingCapacity: true)
+                rowRenderContentCount = 0
+            }
+            rowRenderContentCache[key, default: []].append(
+                RowRenderContentEntry(line: line, signature: signature, info: info))
+            rowRenderContentCount += 1
+        }
         return info
     }
 
@@ -2517,8 +2589,7 @@ extension TerminalView {
             // creation, and extract the attribute values both draw passes need
             // once per run: bridging the whole attribute dictionary per pass is
             // far more expensive than these keyed lookups.
-            let preparedSegments: [(segment: ViewLineSegment, ctLine: CTLine, runs: [PreparedRun])] =
-                lineInfo.segments.compactMap { segment in
+            let preparedSegments = lineInfo.prepared.value ?? lineInfo.segments.compactMap { segment in
                     guard segment.attributedString.length > 0 else { return nil }
                     let ctLine = cachedCTLine(segment.attributedString)
                     guard let ctRuns = CTLineGetGlyphRuns(ctLine) as? [CTRun] else { return nil }
@@ -2536,6 +2607,7 @@ extension TerminalView {
                     }
                     return (segment, ctLine, runs)
                 }
+            lineInfo.prepared.value = preparedSegments
 
             // The row's block, if it has one: its fill, its rule, and the
             // colour the runs carrying it need not paint again.
