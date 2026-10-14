@@ -30,9 +30,12 @@ public struct SearchMatch: Equatable, Sendable {
 extension TerminalView {
     /// Every literal, case-insensitive match of `term` that starts in the
     /// buffer rows `rows`, top to bottom, at most `limit` of them: the
-    /// newest, the ones nearest the bottom, when there are more. Rows
-    /// outside `rows` are never read except to finish a paragraph that
-    /// soft-wraps into them. Selects nothing and scrolls nothing.
+    /// newest, the ones nearest the bottom, when there are more. Rows below
+    /// `rows` are never read. Selects nothing and scrolls nothing.
+    ///
+    /// The rows read are kept, and read again only once their line has
+    /// changed, so a search after a feed reads the rows the feed wrote and
+    /// no others. `forgetSearchAll` lets them go.
     public func searchAll (_ term: String, rows: Range<Int>, limit: Int) -> [SearchMatch] {
         guard let search else {
             return []
@@ -40,6 +43,18 @@ extension TerminalView {
         return search.searchAll(term: term, rows: rows, limit: limit).map {
             SearchMatch(row: $0.row, col: $0.col, cells: $0.size)
         }
+    }
+
+    /// Reads the rows a `searchAll` over `rows` would, ahead of it: the
+    /// first search reads every row, which over a long scrollback is worth
+    /// doing before a keystroke waits on it.
+    public func prepareSearchAll (rows: Range<Int>) {
+        search?.prepareSearchAll(rows: rows)
+    }
+
+    /// Lets go of the rows `searchAll` kept.
+    public func forgetSearchAll () {
+        search?.forgetIndex()
     }
 
     /// Finds the next match for `term`, selects it, and optionally scrolls it into view.

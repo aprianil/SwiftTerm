@@ -16,6 +16,7 @@ final class SearchService {
     private let state = SearchState()
     private let lineCache: SearchLineCache
     private let engine: SearchEngine
+    private lazy var index = SearchIndex(terminal: terminal)
     private var lastSelection: SearchSelection?
 
     private(set) var lastResult: SearchResult?
@@ -114,41 +115,20 @@ final class SearchService {
     }
 
     /// The last `limit` matches of `term` whose first cell lies in `rows`,
-    /// returned top to bottom. Walks up from the bottom a paragraph at a
-    /// time and stops once it holds `limit`, so the newest are the ones
-    /// kept, nothing below `rows` is read, and a term that matches
-    /// everywhere costs `limit` matches rather than the whole buffer.
-    func searchAll (term: String, rows: Range<Int>, limit: Int, caseSensitive: Bool = false) -> [SearchResult] {
-        guard state.isValidSearchTerm(term), limit > 0 else {
-            return []
-        }
-        let lines = terminal.displayBuffer.lines
-        let lower = max(0, rows.lowerBound)
-        let upper = min(rows.upperBound, lines.count)
-        guard lower < upper else {
-            return []
-        }
-        lineCache.initLinesCache()
+    /// returned top to bottom, through `SearchIndex`, which reads a row
+    /// again only when its line changed. Literal and case-insensitive.
+    func searchAll (term: String, rows: Range<Int>, limit: Int) -> [SearchResult] {
+        index.search(term: term, rows: rows, limit: limit)
+    }
 
-        // Paragraphs, bottom first; each one's matches left to right.
-        var paragraphs: [ArraySlice<SearchResult>] = []
-        var kept = 0
-        var row = upper - 1
-        while row >= lower && kept < limit {
-            var head = row
-            while head > 0 && lines[head].isWrapped {
-                head -= 1
-            }
-            let found = engine.findAllInParagraph(term: term, head: head, caseSensitive: caseSensitive)
-                .filter { $0.row >= lower && $0.row < upper }
-            let taken = found.suffix(limit - kept)
-            if !taken.isEmpty {
-                paragraphs.append(taken)
-                kept += taken.count
-            }
-            row = head - 1
-        }
-        return paragraphs.reversed().flatMap { $0 }
+    /// Reads the rows a `searchAll` over `rows` would read, ahead of it.
+    func prepareSearchAll (rows: Range<Int>) {
+        index.prepare(upTo: rows.upperBound)
+    }
+
+    /// Lets go of what `searchAll` read, for an embedder done searching.
+    func forgetIndex () {
+        index.reset()
     }
 
     func selectionRange (for result: SearchResult) -> (start: Position, end: Position) {

@@ -294,64 +294,23 @@ final class SearchEngine {
             return nil
         }
 
-        return result(term: matchTerm, at: foundIndex, length: matchTerm.count, head: row, offsets: offsets)
-    }
-
-    /// Every literal match of `term` in the paragraph whose first row is
-    /// `head` (a row that is not a soft-wrap continuation), left to right,
-    /// none overlapping. One string per paragraph, from the line cache, so
-    /// a caller walking the buffer a paragraph at a time reads each row once.
-    func findAllInParagraph (term: String, head: Int, caseSensitive: Bool) -> [SearchResult] {
-        let buffer = terminal.displayBuffer
-        guard !term.isEmpty, head >= 0, head < buffer.lines.count else {
-            return []
-        }
-        var cache = lineCache.getLineFromCache(row: head)
-        if cache == nil {
-            let translated = lineCache.translateBufferLineToStringWithWrap(lineIndex: head, trimRight: true)
-            lineCache.setLineInCache(row: head, entry: translated)
-            cache = translated
-        }
-        guard let entry = cache else {
-            return []
-        }
-        let line = entry.lineAsString
-        let options: String.CompareOptions = caseSensitive ? [] : [.caseInsensitive]
-        var results: [SearchResult] = []
-        var from = line.startIndex
-        // Counted as the walk goes, so each match costs the distance from
-        // the last one rather than from the start of the line.
-        var index = 0
-        while from < line.endIndex, let found = line.range(of: term, options: options, range: from..<line.endIndex) {
-            index += line.distance(from: from, to: found.lowerBound)
-            let length = line.distance(from: found.lowerBound, to: found.upperBound)
-            results.append(result(term: String(line[found]), at: index, length: length, head: head, offsets: entry.lineOffsets))
-            index += length
-            from = found.upperBound
-        }
-        return results
-    }
-
-    /// A match at character `foundIndex` of the paragraph string that starts
-    /// at row `head`, placed on the row and cell it starts on.
-    private func result (term: String, at foundIndex: Int, length: Int, head row: Int, offsets: [Int]) -> SearchResult {
         var startRowOffset = 0
         while startRowOffset < offsets.count - 1 && foundIndex >= offsets[startRowOffset + 1] {
             startRowOffset += 1
         }
 
         var endRowOffset = startRowOffset
-        while endRowOffset < offsets.count - 1 && (foundIndex + length) >= offsets[endRowOffset + 1] {
+        while endRowOffset < offsets.count - 1 && (foundIndex + matchTerm.count) >= offsets[endRowOffset + 1] {
             endRowOffset += 1
         }
 
         let startColOffset = foundIndex - offsets[startRowOffset]
-        let endColOffset = foundIndex + length - offsets[endRowOffset]
+        let endColOffset = foundIndex + matchTerm.count - offsets[endRowOffset]
         let startColIndex = stringLengthToBufferSize(row: row + startRowOffset, offset: startColOffset)
         let endColIndex = stringLengthToBufferSize(row: row + endRowOffset, offset: endColOffset)
         let size = endColIndex - startColIndex + terminal.cols * (endRowOffset - startRowOffset)
 
-        return SearchResult(term: term, col: startColIndex, row: row + startRowOffset, size: size)
+        return SearchResult(term: matchTerm, col: startColIndex, row: row + startRowOffset, size: size)
     }
 
     private func stringLengthToBufferSize (row: Int, offset: Int) -> Int {
