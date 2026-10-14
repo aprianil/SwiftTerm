@@ -221,10 +221,17 @@ struct ViewLineInfo {
     var powerlineGlyphs: [PowerlineRenderItem]
 }
 
+/// A run of a row's cells whose glyphs a match mark draws in its own ink
+/// (`TerminalView.matchMarks`).
+struct MarkInk: Equatable {
+    let columns: Range<Int>
+    let ink: TTColor
+}
+
 /// What a built row depends on beyond the view-wide state: the line's own
-/// revision, plus the three things the CoreText builder reads that the line
-/// itself does not carry (this row's selection, its link highlights, and the
-/// bidi paragraph it belongs to).
+/// revision, plus the things the CoreText builder reads that the line
+/// itself does not carry (this row's selection, its link highlights, the
+/// ink its match marks give it, and the bidi paragraph it belongs to).
 struct RowRenderSignature: Equatable {
     let generation: UInt64
     let bidiRevision: Int
@@ -232,6 +239,7 @@ struct RowRenderSignature: Equatable {
     let selection: Range<Int>?
     let implicitLinks: [Range<Int>]
     let hoverLink: Range<Int>?
+    let inks: [MarkInk]
 }
 
 /// What the draws so far did with the per-row render cache: rows reused
@@ -272,6 +280,7 @@ final class RowRenderContentEntry {
     let selection: Range<Int>?
     let implicitLinks: [Range<Int>]
     let hoverLink: Range<Int>?
+    let inks: [MarkInk]
     let info: ViewLineInfo
 
     init (line: BufferLine, signature: RowRenderSignature, info: ViewLineInfo) {
@@ -280,12 +289,14 @@ final class RowRenderContentEntry {
         self.selection = signature.selection
         self.implicitLinks = signature.implicitLinks
         self.hoverLink = signature.hoverLink
+        self.inks = signature.inks
         self.info = info
     }
 
     func matches (_ other: BufferLine, _ signature: RowRenderSignature) -> Bool {
         cols == signature.cols && selection == signature.selection
             && implicitLinks == signature.implicitLinks && hoverLink == signature.hoverLink
+            && inks == signature.inks
             && line.rendersSame(as: other)
     }
 }
@@ -1274,6 +1285,7 @@ extension TerminalView {
     {
         var segments: [ViewLineSegment] = []
         let selectionColumns = selectedColumnsRange(row: row, cols: cols)
+        let inks = markInks(row: row)
         var col = 0
         var builder: ViewLineSegmentBuilder?
 
@@ -1306,6 +1318,7 @@ extension TerminalView {
         var lastHovered = false
         var lastIsSelected = false
         var lastBlinkHidden = false
+        var lastInk: TTColor? = nil
 
         func flushPending() {
             if !pendingText.isEmpty, let attrs = pendingAttrs {
@@ -1357,12 +1370,13 @@ extension TerminalView {
 
             let isSelected = isColumnSelected(selectionColumns, column: col, width: width)
             let blinkHidden = !textBlinkVisible && attr.style.contains(.blink)
+            let ink = inks.isEmpty ? nil : inks.first(where: { $0.columns.contains(col) })?.ink
 
             // Flush batch when attributes change; the batch dictionary is only
             // rebuilt at these boundaries, so unchanged cells append without
             // copying it.
             if attr != lastAttr || hasUrl != lastHasUrl || hovered != lastHovered || isSelected != lastIsSelected
-                || blinkHidden != lastBlinkHidden
+                || blinkHidden != lastBlinkHidden || ink != lastInk
                 || pendingAttrs == nil {
                 flushPending()
                 lastAttr = attr
@@ -1370,6 +1384,7 @@ extension TerminalView {
                 lastHovered = hovered
                 lastIsSelected = isSelected
                 lastBlinkHidden = blinkHidden
+                lastInk = ink
                 var batchAttributes = attributes
                 if isSelected {
                     batchAttributes[.selectionBackgroundColor] = selectedTextBackgroundColor
@@ -1379,6 +1394,17 @@ extension TerminalView {
                     }
                     if batchAttributes[.strikethroughColor] != nil {
                         batchAttributes[.strikethroughColor] = selectedTextForegroundColor
+                    }
+                }
+                // A match mark's ink over the cell's own colour, and over
+                // the selection's: the mark you are on is the one to read.
+                if let ink {
+                    batchAttributes[.foregroundColor] = ink
+                    if batchAttributes[.underlineColor] != nil {
+                        batchAttributes[.underlineColor] = ink
+                    }
+                    if batchAttributes[.strikethroughColor] != nil {
+                        batchAttributes[.strikethroughColor] = ink
                     }
                 }
                 if blinkHidden {
@@ -1744,7 +1770,8 @@ extension TerminalView {
             implicitLinks: underliningImplicitLinks ? implicitHighlightRanges(forRow: row) : [],
             hoverLink: underliningHover
                 ? linkHighlightRange?.first (where: { $0.row == row })?.range
-                : nil)
+                : nil,
+            inks: markInks(row: row))
         if let entry = rowRenderCache[row], entry.line === line, entry.signature == signature {
             rowRenderCacheHits &+= 1
             return entry.info
@@ -2710,6 +2737,29 @@ extension TerminalView {
             }
 
             context.restoreGState()
+
+            // Match marks, over everything the row's runs and its block
+            // filled and under its glyphs, so a mark shows on a diff row's
+            // ground and inside a message block alike.
+            if let marks = matchMarksByRow[row] {
+                context.saveGState()
+                context.setShouldAntialias(matchMarkCornerRadius > 0)
+                for mark in marks {
+                    let rect = CGRect(x: lineOrigin.x + CGFloat(mark.columns.lowerBound) * cellDimension.width,
+                                      y: lineOrigin.y,
+                                      width: CGFloat(mark.columns.count) * cellDimension.width,
+                                      height: cellDimension.height)
+                    context.setFillColor(cachedCGColor(mark.fill))
+                    let radius = min(matchMarkCornerRadius, rect.width / 2, rect.height / 2)
+                    if radius > 0 {
+                        context.addPath(CGPath(roundedRect: rect, cornerWidth: radius, cornerHeight: radius, transform: nil))
+                        context.fillPath()
+                    } else {
+                        context.fill(rect)
+                    }
+                }
+                context.restoreGState()
+            }
 
             // The selection's wash, once per row rather than run by run,
             // over whatever the runs filled: a block behind a message keeps

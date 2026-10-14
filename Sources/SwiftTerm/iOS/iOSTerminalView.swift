@@ -452,6 +452,85 @@ open class TerminalView: UIScrollView, UITextInputTraits, UIKeyInput, UIScrollVi
         }
     }
 
+    /// A run of cells a search matched, lit in colours of the embedder's
+    /// choosing. See `matchMarks`.
+    public struct MatchMark: Equatable {
+        /// The cells, in buffer rows (`searchAll`).
+        public var match: SearchMatch
+        /// The block drawn under the cells.
+        public var fill: UIColor
+        /// The colour the cells' glyphs are drawn in, or nil to keep their
+        /// own.
+        public var ink: UIColor?
+
+        public init (match: SearchMatch, fill: UIColor, ink: UIColor? = nil) {
+            self.match = match
+            self.fill = fill
+            self.ink = ink
+        }
+    }
+
+    /// Search matches lit on the screen: a block of `fill` under each, drawn
+    /// over the backgrounds the program and the embedder painted on the row
+    /// and under its glyphs, and the glyphs in `ink` where a mark has one.
+    /// In buffer rows, so a scroll moves them with their words and asks for
+    /// nothing. A match that runs past its row's end carries on at the next
+    /// row's first cell, as its words do. Separate from the selection: a mark
+    /// changes nothing ⌘C copies. Empty by default.
+    ///
+    /// The fill is draw-time, like `rowBands`. The ink is not: a built row
+    /// carries its glyphs' colours, so the ink a row's marks give it is part
+    /// of what the row is built from (`RowRenderSignature`), and a mark that
+    /// moves rebuilds the rows it left and the rows it reached.
+    public var matchMarks: [MatchMark] = [] {
+        didSet {
+            guard matchMarks != oldValue else { return }
+            var byRow: [Int: [RowMark]] = [:]
+            let cols = max(1, terminal.cols)
+            for mark in matchMarks {
+                let start = mark.match.col
+                let end = start + max(0, mark.match.cells)
+                var offset = 0
+                while offset * cols < end {
+                    let from = max(start, offset * cols) - offset * cols
+                    let to = min(end, (offset + 1) * cols) - offset * cols
+                    if from < to {
+                        byRow[mark.match.row + offset, default: []].append(
+                            RowMark(columns: from..<to, fill: mark.fill, ink: mark.ink))
+                    }
+                    offset += 1
+                }
+            }
+            matchMarksByRow = byRow
+            terminal.updateFullScreen()
+            queuePendingDisplay()
+        }
+    }
+
+    /// The corners of a match mark's block, in points. Square by default.
+    public var matchMarkCornerRadius: CGFloat = 0 {
+        didSet {
+            terminal.updateFullScreen()
+            queuePendingDisplay()
+        }
+    }
+
+    /// One row's share of a mark.
+    struct RowMark: Equatable {
+        let columns: Range<Int>
+        let fill: UIColor
+        let ink: UIColor?
+    }
+
+    /// `matchMarks` by the buffer row each part of a mark is on.
+    var matchMarksByRow: [Int: [RowMark]] = [:]
+
+    /// The cell ranges on `row` whose glyphs a mark inks, and the ink.
+    func markInks (row: Int) -> [MarkInk] {
+        guard let marks = matchMarksByRow[row] else { return [] }
+        return marks.compactMap { mark in mark.ink.map { MarkInk(columns: mark.columns, ink: $0) } }
+    }
+
     /// How far in from the view's own left and right edges a ruled block is
     /// drawn, in points. See `blockEdges`.
     public struct BlockEdges: Equatable {
