@@ -8,7 +8,40 @@
 #if os(macOS) || os(iOS) || os(visionOS)
 import Foundation
 
+/// One match of a search, in buffer rows: row 0 is the oldest line the
+/// buffer keeps, not the top of the screen, so a match stays put while the
+/// view scrolls.
+public struct SearchMatch: Equatable, Sendable {
+    /// The buffer row the match starts on.
+    public let row: Int
+    /// The match's first cell on that row.
+    public let col: Int
+    /// The match's width in cells, a wide glyph counting two. It runs past
+    /// the row's end when the match crosses a soft wrap onto the next row.
+    public let cells: Int
+
+    public init (row: Int, col: Int, cells: Int) {
+        self.row = row
+        self.col = col
+        self.cells = cells
+    }
+}
+
 extension TerminalView {
+    /// Every literal, case-insensitive match of `term` that starts in the
+    /// buffer rows `rows`, top to bottom, at most `limit` of them: the
+    /// newest, the ones nearest the bottom, when there are more. Rows
+    /// outside `rows` are never read except to finish a paragraph that
+    /// soft-wraps into them. Selects nothing and scrolls nothing.
+    public func searchAll (_ term: String, rows: Range<Int>, limit: Int) -> [SearchMatch] {
+        guard let search else {
+            return []
+        }
+        return search.searchAll(term: term, rows: rows, limit: limit).map {
+            SearchMatch(row: $0.row, col: $0.col, cells: $0.size)
+        }
+    }
+
     /// Finds the next match for `term`, selects it, and optionally scrolls it into view.
     /// - Parameters:
     ///   - term: The search term.

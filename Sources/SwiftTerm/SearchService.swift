@@ -113,6 +113,44 @@ final class SearchService {
         return results
     }
 
+    /// The last `limit` matches of `term` whose first cell lies in `rows`,
+    /// returned top to bottom. Walks up from the bottom a paragraph at a
+    /// time and stops once it holds `limit`, so the newest are the ones
+    /// kept, nothing below `rows` is read, and a term that matches
+    /// everywhere costs `limit` matches rather than the whole buffer.
+    func searchAll (term: String, rows: Range<Int>, limit: Int, caseSensitive: Bool = false) -> [SearchResult] {
+        guard state.isValidSearchTerm(term), limit > 0 else {
+            return []
+        }
+        let lines = terminal.displayBuffer.lines
+        let lower = max(0, rows.lowerBound)
+        let upper = min(rows.upperBound, lines.count)
+        guard lower < upper else {
+            return []
+        }
+        lineCache.initLinesCache()
+
+        // Paragraphs, bottom first; each one's matches left to right.
+        var paragraphs: [ArraySlice<SearchResult>] = []
+        var kept = 0
+        var row = upper - 1
+        while row >= lower && kept < limit {
+            var head = row
+            while head > 0 && lines[head].isWrapped {
+                head -= 1
+            }
+            let found = engine.findAllInParagraph(term: term, head: head, caseSensitive: caseSensitive)
+                .filter { $0.row >= lower && $0.row < upper }
+            let taken = found.suffix(limit - kept)
+            if !taken.isEmpty {
+                paragraphs.append(taken)
+                kept += taken.count
+            }
+            row = head - 1
+        }
+        return paragraphs.reversed().flatMap { $0 }
+    }
+
     func selectionRange (for result: SearchResult) -> (start: Position, end: Position) {
         let start = Position(col: result.col, row: result.row)
         let end = advancePosition(from: start, by: max(result.size, 0))
