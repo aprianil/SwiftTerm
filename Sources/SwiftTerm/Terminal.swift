@@ -7841,13 +7841,18 @@ open class Terminal {
         let firstChar: Character
         let lastCol: Int
         let lastChar: Character
+        /// One past the last cell the program wrote, blanks included.
+        let writtenEnd: Int
     }
+
+    private static let ghosttyImplicitURLSchemes =
+        #"https?://|mailto:|ftp://|file:|ssh:|git://|ssh://|tel:|magnet:|ipfs://|ipns://|gemini://|gopher://|news:"#
 
     // Ghostty-style URL/path pattern adapted for ICU regex.
     // Oniguruma uses a variable-length lookbehind in one branch; we keep
     // compatibility by applying an equivalent post-match suppression rule.
     private static let ghosttyImplicitLinkRegex: NSRegularExpression? = {
-        let urlSchemes = #"https?://|mailto:|ftp://|file:|ssh:|git://|ssh://|tel:|magnet:|ipfs://|ipns://|gemini://|gopher://|news:"#
+        let urlSchemes = ghosttyImplicitURLSchemes
         // NOTE: this used to be `\[[:0-9a-fA-F]+(?:[:0-9a-fA-F]*)+\]`. That inner `(?:X*)+` is a
         // classic catastrophic-backtracking construct: on input that opens a bracket but never
         // closes it (e.g. `https://[aaaaaaaa...`), ICU explores exponentially many ways to split
@@ -7994,14 +7999,20 @@ open class Terminal {
             }
             let isContinuationRow = isImplicitContinuationRow(row, startRow: startRow, in: buffer)
             let startCol = isContinuationRow ? firstNonWhitespaceColumn(in: line, lineLimit: lineLimit) : 0
-            guard startCol < lineLimit else {
+            // A row the next one carries on from without a wrap flag ends at
+            // its last character: whatever blank it wrote after that is the
+            // program's padding, not part of a link that runs on below.
+            let endCol = row < endRow && !buffer.lines[row + 1].isWrapped
+                ? implicitTextEnd(of: line, lineLimit: lineLimit)
+                : lineLimit
+            guard startCol < endCol else {
                 continue
             }
-            if row == targetRow && targetCol >= startCol && targetCol < lineLimit {
+            if row == targetRow && targetCol >= startCol && targetCol < endCol {
                 targetIsInsideTrimmedContent = true
             }
 
-            for col in startCol..<lineLimit {
+            for col in startCol..<endCol {
                 if col > 0 && line[col].code == 0 && line[col - 1].width == 2 {
                     continue
                 }
@@ -8091,10 +8102,35 @@ open class Terminal {
             return false
         }
 
-        // Heuristic for editor-rendered wraps: the upper segment should reach
-        // near the visual right edge and the seam should form a valid link.
-        let continuationThreshold = max(0, cols - max(2, cols / 5))
-        guard upperInfo.lastCol >= continuationThreshold else {
+        // Heuristic for program-rendered wraps (claude draws every row of its
+        // output itself, and none of them carries a wrap flag). A wrapper that
+        // breaks a word in the middle fills the row first, so the upper row's
+        // last character sits on the right edge, or one column short of it
+        // when the row is padded out to the edge (claude's echo of your
+        // message is 47 columns of text and one of its background). A row
+        // that stops sooner was broken at a space, and the next row begins
+        // the next word: joining it glued prose onto the link
+        // (`https://example.com/a` and `and` opened `.../aand`, measured
+        // 2026-10-16). Any row in the last fifth used to join.
+        let isFull = upperInfo.lastCol == cols - 1
+            || (upperInfo.lastCol == cols - 2 && upperInfo.writtenEnd >= cols)
+        if !isFull {
+            // A wrapper that breaks at a link's own punctuation leaves the row
+            // short (vim's `linebreak` breaks after `/`, `.`, `-` and `?`), so
+            // a row that stops in the last fifth on one of those still joins,
+            // but only onto more link: a first word with a separator inside
+            // it (`keeps/going`), not a word of prose.
+            let threshold = max(0, cols - max(2, cols / 5))
+            guard upperInfo.lastCol >= threshold,
+                  Self.implicitBreakAfter.contains(upperInfo.lastChar),
+                  implicitRowBeginsWithLinkRest(lower, from: lowerInfo.firstCol, in: buffer)
+            else {
+                return false
+            }
+        }
+        // The space between two links is where a word wrapper breaks, so a
+        // row that begins with a scheme begins a link of its own.
+        guard !implicitRowBeginsWithScheme(lower, from: lowerInfo.firstCol, in: buffer) else {
             return false
         }
 
@@ -8168,7 +8204,8 @@ open class Terminal {
             firstCol: first.col,
             firstChar: first.char,
             lastCol: last.col,
-            lastChar: last.char
+            lastChar: last.char,
+            writtenEnd: lineLimit
         )
     }
 
@@ -8241,7 +8278,8 @@ open class Terminal {
 
     /// Rows `from` through `through`, joined the way `buildGhosttyImplicitLineMap`
     /// joins them: the first row whole, every later row with its leading indent
-    /// dropped, and the last row stopping at `lastCol`.
+    /// dropped, a row that carries on without a wrap flag stopping at its last
+    /// character, and the last row stopping at `lastCol`.
     private func implicitGroupText(from: Int, through: Int, lastCol: Int, in buffer: Buffer) -> String
     {
         var text = ""
@@ -8251,12 +8289,57 @@ open class Terminal {
             guard rawLimit > 0 else { continue }
             let trimmed = min(rawLimit, line.getTrimmedLength())
             guard trimmed > 0 else { continue }
-            let endCol = row == through ? min(trimmed, lastCol + 1) : trimmed
+            let endCol = row == through
+                ? min(trimmed, lastCol + 1)
+                : (buffer.lines[row + 1].isWrapped ? trimmed : implicitTextEnd(of: line, lineLimit: trimmed))
             let startCol = row == from ? 0 : firstNonWhitespaceColumn(in: line, lineLimit: trimmed)
             guard startCol < endCol else { continue }
             text += implicitLineSegmentText(line: line, startCol: startCol, endCol: endCol)
         }
         return text
+    }
+
+    /// One past a row's last character that is not blank, within `lineLimit`.
+    private func implicitTextEnd(of line: BufferLine, lineLimit: Int) -> Int
+    {
+        var col = lineLimit
+        while col > 0 {
+            let cell = line[col - 1]
+            if cell.code == 0 && col > 1 && line[col - 2].width == 2 {
+                // The right half of a wide character belongs to its left.
+                col -= 1
+                continue
+            }
+            if cell.code != 0 && !getCharacter(for: cell).isWhitespace {
+                return col
+            }
+            col -= 1
+        }
+        return 0
+    }
+
+    private static let implicitBreakAfter: Set<Character> = ["/", ".", "-", "?", "&", "=", "#"]
+
+    /// Whether a row's first word reads as the rest of a link: a separator
+    /// inside it once a sentence's closing punctuation is set aside.
+    private func implicitRowBeginsWithLinkRest(_ row: Int, from col: Int, in buffer: Buffer) -> Bool
+    {
+        let line = buffer.lines[row]
+        let text = implicitLineSegmentText(line: line, startCol: col, endCol: min(cols, line.count))
+        let word = text.prefix { !$0.isWhitespace }
+            .reversed().drop { ",.;:!?)'\"".contains($0) }.reversed()
+        return word.contains { "/.?#=&".contains($0) }
+    }
+
+    private static let implicitSchemeStart: NSRegularExpression? =
+        try? NSRegularExpression(pattern: "^(?:" + ghosttyImplicitURLSchemes + ")", options: [])
+
+    private func implicitRowBeginsWithScheme(_ row: Int, from col: Int, in buffer: Buffer) -> Bool
+    {
+        guard let regex = Self.implicitSchemeStart else { return false }
+        let line = buffer.lines[row]
+        let text = implicitLineSegmentText(line: line, startCol: col, endCol: min(min(cols, line.count), col + 12))
+        return regex.firstMatch(in: text, options: [], range: NSRange(text.startIndex..., in: text)) != nil
     }
 
     private func implicitLineSegmentText(line: BufferLine, startCol: Int, endCol: Int) -> String
