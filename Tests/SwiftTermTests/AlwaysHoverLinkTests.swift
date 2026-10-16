@@ -171,6 +171,26 @@ final class AlwaysHoverLinkTests: XCTestCase {
         XCTAssertNotNil(view.linkHighlightRange)
     }
 
+    func testAFilteredLinkIsNotDrawnAsALinkAtRest () {
+        let view = makeView()
+        let top = view.getTerminal().buffer.yDisp
+        XCTAssertFalse(view.implicitHighlightRanges(forRow: top).isEmpty, "the url is a link at rest")
+        let asLink = pixels(of: view)
+
+        var asked = 0
+        view.implicitLinkFilter = { _ in asked += 1; return false }
+        XCTAssertTrue(view.implicitHighlightRanges(forRow: top).isEmpty, "a refused url is plain at rest")
+        XCTAssertNotEqual(pixels(of: view), asLink)
+        _ = view.implicitHighlightRanges(forRow: top + 1)
+        _ = pixels(of: view)
+        XCTAssertEqual(asked, 1, "one text, one question, however many draws")
+
+        // Forgotten, it is asked again.
+        view.implicitLinkFilter = { _ in true }
+        XCTAssertFalse(view.implicitHighlightRanges(forRow: top).isEmpty)
+        XCTAssertEqual(pixels(of: view), asLink)
+    }
+
     func testThePickChangesThePixelsAndNeverStrandsARow () {
         let view = makeView()
         let top = view.getTerminal().buffer.yDisp

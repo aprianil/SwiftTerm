@@ -7469,11 +7469,18 @@ open class Terminal {
     /// else) that was 20 to 30 ms of regex per draw.
     public func implicitLinkRanges(startRow: Int, endRow: Int) -> [Int: [Range<Int>]]
     {
+        implicitLinkHits(startRow: startRow, endRow: endRow).mapValues { $0.map(\.range) }
+    }
+
+    /// `implicitLinkRanges` with each range's link text, for an embedder
+    /// that keeps some links plain (`implicitLinkFilter`).
+    public func implicitLinkHits(startRow: Int, endRow: Int) -> [Int: [(range: Range<Int>, text: String)]]
+    {
         guard Self.ghosttyImplicitLinkRegex != nil else {
             return [:]
         }
         let buffer = displayBuffer
-        var out: [Int: [Range<Int>]] = [:]
+        var out: [Int: [(range: Range<Int>, text: String)]] = [:]
         var row = max(0, startRow)
         let last = min(endRow, buffer.lines.count - 1)
         beginImplicitScan()
@@ -7481,7 +7488,7 @@ open class Terminal {
         while row <= last {
             let scan = implicitGroupScan(at: row, in: buffer)
             for hit in scan.hits {
-                out[row + hit.rowOffset, default: []].append(hit.range)
+                out[row + hit.rowOffset, default: []].append((hit.range, hit.text))
             }
             row += max(1, scan.advance)
         }
@@ -7499,6 +7506,8 @@ open class Terminal {
         struct Hit {
             let rowOffset: Int
             let range: Range<Int>
+            /// The whole link's text, the same on each row it covers.
+            let text: String
         }
         /// The lines this scan read, top to bottom, held so a later visit can
         /// prove it is looking at the same screen. Holding them also keeps the
@@ -7687,7 +7696,8 @@ open class Terminal {
             for matchedRow in bounds.keys.sorted() {
                 guard let b = bounds[matchedRow], b.start < b.end else { continue }
                 hits.append(ImplicitGroupScan.Hit(rowOffset: matchedRow - row,
-                                                  range: b.start..<b.end))
+                                                  range: b.start..<b.end,
+                                                  text: String(lineMap.text[textRange])))
             }
         }
 

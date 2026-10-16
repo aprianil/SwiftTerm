@@ -1568,8 +1568,14 @@ extension TerminalView {
             if signature != implicitLinkSignature {
                 implicitLinkSignature = signature
                 let top = terminal.displayBuffer.yDisp
+                #if os(macOS)
+                // The links the embedder keeps plain are not drawn as links.
+                implicitLinkRanges = terminal.implicitLinkHits(startRow: top, endRow: top + terminal.rows - 1)
+                    .mapValues { hits in hits.filter { passesFilter(text: $0.text) }.map(\.range) }
+                #else
                 implicitLinkRanges = terminal.implicitLinkRanges(startRow: top,
                                                                  endRow: top + terminal.rows - 1)
+                #endif
             }
         }
         return implicitLinkRanges[row] ?? []
@@ -1918,7 +1924,7 @@ extension TerminalView {
             return nil
         }
         #if os(macOS)
-        guard passesFilter(match) else { return nil }
+        guard match.isExplicit || passesFilter(text: match.text) else { return nil }
         #endif
         if match.isExplicit,
            let payload = payloadString(at: position),

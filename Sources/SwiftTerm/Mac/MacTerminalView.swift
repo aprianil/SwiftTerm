@@ -1175,6 +1175,9 @@ open class TerminalView: NSView, NSTextInputClient, NSUserInterfaceValidations, 
 
     open override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
+        // A press whose release went to no window ends here, so a link is
+        // never left drawn sunk.
+        setLinkPressed(false)
         startWindowMouseMovedFallback()
         updateTextBlinkLifecycle()
 #if canImport(MetalKit)
@@ -1645,20 +1648,35 @@ open class TerminalView: NSView, NSTextInputClient, NSUserInterfaceValidations, 
         }
     }
 
-    /// Asked of an implicit link's text before the pointer picks it out or
-    /// a click opens it: false and it is plain text there. For a path that
-    /// is not on this machine, which would light up and then open nothing.
-    /// The last answer is kept, so a pointer along one link asks once.
+    /// Asked of an implicit link's text before it is drawn as a link, picked
+    /// out by the pointer or opened by a click: false and it is plain text.
+    /// For a path that is not on this machine, which would look clickable
+    /// and open nothing. Each text is asked once until the answers are
+    /// forgotten, so a screen streaming under a link does not ask per frame.
     public var implicitLinkFilter: ((String) -> Bool)? {
-        didSet { lastFilterAnswer = nil }
+        didSet { forgetImplicitLinkAnswers() }
     }
-    var lastFilterAnswer: (text: String, keep: Bool)?
+    var implicitLinkAnswers: [String: Bool] = [:]
 
-    func passesFilter(_ match: Terminal.LinkMatch) -> Bool {
-        guard !match.isExplicit, let implicitLinkFilter else { return true }
-        if let last = lastFilterAnswer, last.text == match.text { return last.keep }
-        let keep = implicitLinkFilter(match.text)
-        lastFilterAnswer = (match.text, keep)
+    /// Drop the filter's kept answers and ask again: the embedder's answer
+    /// changed (the view now shows another session, whose folder differs),
+    /// or the pointer left and what is on disk may have moved on.
+    public func forgetImplicitLinkAnswers() {
+        implicitLinkAnswers.removeAll(keepingCapacity: true)
+        implicitLinkSignature = 0
+        implicitLinkProbedRow = -1
+        invalidateRowRenderCache()
+        terminal.updateFullScreen()
+        queuePendingDisplay()
+    }
+
+    func passesFilter(text: String) -> Bool {
+        guard let implicitLinkFilter else { return true }
+        if let kept = implicitLinkAnswers[text] { return kept }
+        // Bounded: a long stream of distinct links starts the book over.
+        if implicitLinkAnswers.count >= 256 { implicitLinkAnswers.removeAll(keepingCapacity: true) }
+        let keep = implicitLinkFilter(text)
+        implicitLinkAnswers[text] = keep
         return keep
     }
 
@@ -2035,6 +2053,9 @@ open class TerminalView: NSView, NSTextInputClient, NSUserInterfaceValidations, 
     public override func mouseExited(with event: NSEvent) {
         turnOffUrlPreview()
         lastHoverPosition = nil
+        // What is on disk may have moved on by the pointer's next visit; the
+        // links drawn now keep their look until the screen next changes.
+        implicitLinkAnswers.removeAll(keepingCapacity: true)
         if linkHighlightMode == .hover || linkHighlightMode == .hoverWithModifier || linkHighlightMode == .always {
             let oldRange = linkHighlightRange
             linkHighlightRange = nil
@@ -3640,7 +3661,7 @@ open class TerminalView: NSView, NSTextInputClient, NSUserInterfaceValidations, 
         }
         lastHoverPosition = position
         let match = terminal.linkMatch(at: .buffer(position), mode: .explicitAndImplicit)
-            .flatMap { passesFilter($0) ? $0 : nil }
+            .flatMap { $0.isExplicit || passesFilter(text: $0.text) ? $0 : nil }
         let newRange = match?.rowRanges
         if newRange != linkHighlightRange {
             let oldRange = linkHighlightRange
@@ -3678,6 +3699,12 @@ open class TerminalView: NSView, NSTextInputClient, NSUserInterfaceValidations, 
             reportLink(at: hit.grid)
         }
         updateHoverLink(at: hit.grid)
+        // Over a link the hand is put back on every move: AppKit sets the
+        // arrow after a key change inside the app with no edge crossed, and
+        // a hosting view above can set its own. One comparison a move.
+        if linkHighlightRange != nil, NSCursor.current !== NSCursor.pointingHand {
+            NSCursor.pointingHand.set()
+        }
         
         if terminal.mouseMode.sendMotionEvent() {
             let flags = encodeMouseEvent(with: event, overwriteRelease: true)
