@@ -1635,7 +1635,15 @@ open class TerminalView: NSView, NSTextInputClient, NSUserInterfaceValidations, 
         }
     }
 
-    var linkHighlightRange: [Terminal.LinkMatch.RowRange]?
+    var linkHighlightRange: [Terminal.LinkMatch.RowRange]? {
+        didSet {
+            // Over a link or not is what the cursor rect says
+            // (`resetCursorRects`), from every place that changes it.
+            if (oldValue == nil) != (linkHighlightRange == nil) {
+                window?.invalidateCursorRects(for: self)
+            }
+        }
+    }
 
     /// How far the link under the pointer has sunk under a press, drawn
     /// about its middle: 1 at rest. The embedder animates it, from
@@ -3773,8 +3781,12 @@ open class TerminalView: NSView, NSTextInputClient, NSUserInterfaceValidations, 
         }
     }
     
+    /// The rect says what the pointer is over, hand or I-beam. AppKit puts
+    /// a rect's cursor back on its own (the pointer coming into the view, a
+    /// layout pass), and a rect that always said I-beam took the hand off a
+    /// link it was still over, until the pointer left the link.
     public override func resetCursorRects() {
-        addCursorRect(bounds, cursor: .iBeam)
+        addCursorRect(bounds, cursor: hoverCursor)
     }
     
     public func resetFontSize ()
