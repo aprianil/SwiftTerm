@@ -1842,13 +1842,19 @@ open class TerminalView: NSView, NSTextInputClient, NSUserInterfaceValidations, 
     func startTracking ()
     {
         if tracking == nil {
-            var options: NSTrackingArea.Options = [.activeAlways, .mouseEnteredAndExited]
+            // The visible rect, kept by AppKit as the view moves and grows.
+            // It was `frame` once at start: the superview's coordinates, never
+            // updated, so a view taller than its clip, or offset in it, lost
+            // its moves over part of what showed, and with them the hover and
+            // the cursor. `.cursorUpdate` makes the cursor this view's while
+            // the pointer is over it (`cursorUpdate(with:)`).
+            var options: NSTrackingArea.Options = [.activeAlways, .mouseEnteredAndExited, .inVisibleRect, .cursorUpdate]
             if #available(macOS 26, *) {
                 // See the Tahoe WindowServer workaround above.
             } else {
                 options.insert(.mouseMoved)
             }
-            tracking = NSTrackingArea (rect: frame, options: options, owner: self, userInfo: [:])
+            tracking = NSTrackingArea (rect: .zero, options: options, owner: self, userInfo: [:])
             addTrackingArea(tracking!)
         }
         startWindowMouseMovedFallback()
