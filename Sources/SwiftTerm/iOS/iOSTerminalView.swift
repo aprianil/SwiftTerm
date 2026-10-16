@@ -193,6 +193,10 @@ open class TerminalView: UIScrollView, UITextInputTraits, UIKeyInput, UIScrollVi
         }
     }
 
+    /// The pressed link's sink, see the macOS view. Declared here so the
+    /// shared draw path compiles; nothing on iOS presses it yet.
+    public var linkPressScale: CGFloat = 1
+
     private var lastReportedLink: String?
     var commandActive = false
     private var activeCommandKeys: Set<UIKeyboardHIDUsage> = []

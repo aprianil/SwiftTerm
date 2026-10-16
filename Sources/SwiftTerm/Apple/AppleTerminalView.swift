@@ -2852,6 +2852,12 @@ extension TerminalView {
             context.setAllowsFontSmoothing(fontSmoothing)
             #endif
 
+            // A link being pressed sinks about its own middle on this row
+            // (`linkPressScale`). Applied as the glyphs are drawn, so the
+            // built row is the same and the cache is untouched.
+            let pressedColumns: Range<Int>? = linkPressScale == 1 ? nil
+                : linkHighlightRange?.first(where: { $0.row == row })?.range
+
             // Glyph drawing loop — reuses cached CTLines
             for prepared in preparedSegments {
                 var processedGlyphs = 0
@@ -2913,6 +2919,19 @@ extension TerminalView {
                     }
                     processedGlyphs += runGlyphsCount
 
+                    let pressed = pressedColumns.map { columns in
+                        columns.contains(Int(((positions[0].x - lineOrigin.x) / cellDimension.width).rounded(.down)))
+                    } ?? false
+                    if pressed, let columns = pressedColumns {
+                        let middle = CGPoint(
+                            x: lineOrigin.x + CGFloat(columns.lowerBound + columns.upperBound) / 2 * cellDimension.width,
+                            y: lineOrigin.y + cellDimension.height / 2)
+                        context.saveGState()
+                        context.translateBy(x: middle.x, y: middle.y)
+                        context.scaleBy(x: linkPressScale, y: linkPressScale)
+                        context.translateBy(x: -middle.x, y: -middle.y)
+                    }
+
                     context.setFillColor(
                         cachedCGColor(preparedRun.foregroundColor ?? effectiveNativeForegroundColor))
 
@@ -2958,6 +2977,9 @@ extension TerminalView {
                     if preparedRun.hasDecorations {
                         let runAttributes = preparedRun.attributes as? [NSAttributedString.Key: Any] ?? [:]
                         drawRunAttributes(runAttributes, glyphPositions: positions, in: context)
+                    }
+                    if pressed {
+                        context.restoreGState()
                     }
                 }
             }

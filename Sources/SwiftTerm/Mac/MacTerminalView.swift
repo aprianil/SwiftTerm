@@ -1637,6 +1637,29 @@ open class TerminalView: NSView, NSTextInputClient, NSUserInterfaceValidations, 
 
     var linkHighlightRange: [Terminal.LinkMatch.RowRange]?
 
+    /// How far the link under the pointer has sunk under a press, drawn
+    /// about its middle: 1 at rest. The embedder animates it, from
+    /// `onLinkPress`.
+    public var linkPressScale: CGFloat = 1 {
+        didSet {
+            guard linkPressScale != oldValue else { return }
+            invalidateLinkHighlight(oldRange: linkHighlightRange, newRange: nil)
+            queuePendingDisplay()
+        }
+    }
+
+    /// Told true when the pointer goes down on a link a click would open,
+    /// and false when that press ends: released, or dragged into a
+    /// selection, which opens nothing.
+    public var onLinkPress: ((Bool) -> Void)?
+    var linkPressed = false
+
+    func setLinkPressed(_ on: Bool) {
+        guard on != linkPressed else { return }
+        linkPressed = on
+        onLinkPress?(on)
+    }
+
     /// The cell the pointer was last over, so a move within one cell does not
     /// rerun the link scan of its line.
     var lastHoverPosition: Position?
@@ -3341,6 +3364,13 @@ open class TerminalView: NSView, NSTextInputClient, NSUserInterfaceValidations, 
             didDrag: false,
             clickCount: event.clickCount,
             pressWasSemanticEligible: false)
+        // Before the program's mouse reporting, since the release opens the
+        // link whether or not the program hears the click.
+        let downHit = calculateMouseHit(with: event).grid
+        updateHoverLink(at: downHit)
+        if linkForClick(at: downHit, hasCommandModifier: event.modifierFlags.contains(.command)) != nil {
+            setLinkPressed(true)
+        }
         if allowMouseReporting && !shiftBypassesMouseReporting(for: event) && terminal.mouseMode.sendButtonPress() {
             sharedMouseEvent(with: event)
             return
@@ -3388,6 +3418,7 @@ open class TerminalView: NSView, NSTextInputClient, NSUserInterfaceValidations, 
         stopSelectionAutoScrollTimer()
         autoScrollDelta = 0
         lastSelectionDragPoint = nil
+        setLinkPressed(false)
         let hit = calculateMouseHit(with: event).grid
         updateHoverLink(at: hit, commandOverride: commandActive || event.modifierFlags.contains(.command))
         if !didSelectionDrag,
@@ -3470,6 +3501,7 @@ open class TerminalView: NSView, NSTextInputClient, NSUserInterfaceValidations, 
             selection.startSelection()
         }
         didSelectionDrag = true
+        setLinkPressed(false)
         lastSelectionDragPoint = convert(event.locationInWindow, from: nil)
         autoScrollDelta = 0
         let screenRow = hit.row - displayBuffer.yDisp

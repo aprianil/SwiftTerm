@@ -116,6 +116,44 @@ final class AlwaysHoverLinkTests: XCTestCase {
         XCTAssertEqual(rest?[.underlineColor] as? NSColor, .systemBlue)
     }
 
+    func testAPressSinksThePickedLinkAndLettingGoRestoresIt () {
+        let view = makeView()
+        let top = view.getTerminal().buffer.yDisp
+        view.updateHoverLink(at: Position(col: 10, row: top))
+        let picked = pixels(of: view)
+
+        view.linkPressScale = 0.9
+        assertCacheIsInvisible(view, "the url pressed")
+        XCTAssertNotEqual(pixels(of: view), picked, "a pressed url must look sunk")
+
+        view.linkPressScale = 1
+        XCTAssertEqual(pixels(of: view), picked, "let go, the url is what it was")
+    }
+
+    func testAPressOnALinkIsToldAndTheReleaseEndsIt () {
+        let view = makeView()
+        var told: [Bool] = []
+        view.onLinkPress = { told.append($0) }
+        let cell = view.cellDimension!
+        func event (_ type: NSEvent.EventType, col: Int, row: Int) -> NSEvent {
+            // Rows count down from the top of the view.
+            let point = NSPoint(x: view.contentInsets.left + (CGFloat(col) + 0.5) * cell.width,
+                                y: view.bounds.height - (CGFloat(row) + 0.5) * cell.height)
+            return NSEvent.mouseEvent(with: type, location: point, modifierFlags: [], timestamp: 0,
+                                      windowNumber: 0, context: nil, eventNumber: 0, clickCount: 1,
+                                      pressure: 1)!
+        }
+        // Plain text: no press.
+        view.mouseDown(with: event(.leftMouseDown, col: 2, row: 1))
+        view.mouseUp(with: event(.leftMouseUp, col: 2, row: 1))
+        XCTAssertEqual(told, [])
+
+        view.mouseDown(with: event(.leftMouseDown, col: 10, row: 0))
+        XCTAssertEqual(told, [true])
+        view.mouseUp(with: event(.leftMouseUp, col: 10, row: 0))
+        XCTAssertEqual(told, [true, false])
+    }
+
     func testThePickChangesThePixelsAndNeverStrandsARow () {
         let view = makeView()
         let top = view.getTerminal().buffer.yDisp
