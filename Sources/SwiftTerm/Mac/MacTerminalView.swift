@@ -1624,6 +1624,17 @@ open class TerminalView: NSView, NSTextInputClient, NSUserInterfaceValidations, 
         }
     }
 
+    /// Colour for the solid underline under the pointer's link in `.always`,
+    /// apart from its text. When nil, the underline takes the text's colour.
+    public var hoveredUrlUnderlineColor: NSColor? {
+        didSet {
+            hoveredUrlAttributes.removeAll (keepingCapacity: true)
+            invalidateRowRenderCache()
+            terminal.updateFullScreen()
+            queuePendingDisplay()
+        }
+    }
+
     var linkHighlightRange: [Terminal.LinkMatch.RowRange]?
 
     /// The cell the pointer was last over, so a move within one cell does not

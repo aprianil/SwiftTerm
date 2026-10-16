@@ -100,6 +100,22 @@ final class AlwaysHoverLinkTests: XCTestCase {
         XCTAssertEqual(quiet?[SwiftTermUnderlineStyleKey] as? Int, Int(UnderlineStyle.single.rawValue))
     }
 
+    func testTheHoveredUnderlineCanWearItsOwnColour () {
+        let view = makeView()
+        let attr = Attribute(fg: .defaultColor, bg: .defaultColor, style: [])
+        // Unset: the underline is the text's colour.
+        XCTAssertEqual(view.getAttributes(attr, withUrl: true, hovered: true)?[.underlineColor] as? NSColor, .white)
+
+        // Set: the hovered underline alone takes it; the text and the links
+        // at rest keep theirs.
+        view.hoveredUrlUnderlineColor = .systemRed
+        let hovered = view.getAttributes(attr, withUrl: true, hovered: true)
+        let rest = view.getAttributes(attr, withUrl: true)
+        XCTAssertEqual(hovered?[.underlineColor] as? NSColor, .systemRed)
+        XCTAssertEqual(hovered?[.foregroundColor] as? NSColor, .white)
+        XCTAssertEqual(rest?[.underlineColor] as? NSColor, .systemBlue)
+    }
+
     func testThePickChangesThePixelsAndNeverStrandsARow () {
         let view = makeView()
         let top = view.getTerminal().buffer.yDisp

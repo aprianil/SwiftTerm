@@ -183,6 +183,16 @@ open class TerminalView: UIScrollView, UITextInputTraits, UIKeyInput, UIScrollVi
         }
     }
 
+    /// Colour for the hovered link's underline, see the macOS view.
+    public var hoveredUrlUnderlineColor: UIColor? {
+        didSet {
+            hoveredUrlAttributes.removeAll (keepingCapacity: true)
+            invalidateRowRenderCache()
+            terminal.updateFullScreen()
+            queuePendingDisplay()
+        }
+    }
+
     private var lastReportedLink: String?
     var commandActive = false
     private var activeCommandKeys: Set<UIKeyboardHIDUsage> = []

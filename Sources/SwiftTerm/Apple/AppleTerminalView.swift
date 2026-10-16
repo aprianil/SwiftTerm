@@ -1146,11 +1146,11 @@ extension TerminalView {
             // The hovered link steps up once more: its own colour when the
             // embedder set one, and a solid underline where the others are
             // dashed, so the eye can tell the link the click would open from
-            // the ones around it.
+            // the ones around it. Its underline can wear a colour of its own.
             let linkColor = (hovered ? hoveredUrlColor : nil) ?? urlColor ?? fgColor
             nsattr [.foregroundColor] = linkColor
             nsattr [.underlineStyle] = NSUnderlineStyle.single.rawValue
-            nsattr [.underlineColor] = linkColor
+            nsattr [.underlineColor] = (hovered ? hoveredUrlUnderlineColor : nil) ?? linkColor
             nsattr [SwiftTermUnderlineStyleKey] = Int((hovered ? UnderlineStyle.single : UnderlineStyle.dashed).rawValue)
 
             // Add to cache; truecolor attributes are unbounded, so cap it
