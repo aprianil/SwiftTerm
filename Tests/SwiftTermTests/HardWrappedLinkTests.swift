@@ -137,4 +137,24 @@ final class HardWrappedLinkTests: XCTestCase {
         XCTAssertEqual(word[0], ["https://example.com/abc/def/ghijk/"])
         XCTAssertNil(word[1])
     }
+
+    /// A sentence that ends on a link is often followed by a filename, so a
+    /// short row's closing `.` ends the link.
+    func testAFilenameAfterASentenceEndingOnALinkIsItsOwn() {
+        let found = links([
+            "⏺ Docs live at https://example.com/docs/guide.",
+            "  README.md explains the rest.",
+        ])
+        XCTAssertEqual(found[0], ["https://example.com/docs/guide"])
+    }
+
+    /// A url carried in another url's query goes on past a full row that
+    /// stops on the `=`.
+    func testAUrlInsideAQueryJoinsOverTheRow() {
+        let found = links([
+            "  https://a.example.com/login?next=abcdefghijk=",
+            "https://b.example.com/cb",
+        ])
+        XCTAssertEqual(found[0], ["https://a.example.com/login?next=abcdefghijk=https://b.example.com/cb"])
+    }
 }

@@ -8096,6 +8096,10 @@ open class Terminal {
     private func canJoinImplicitRows(upper: Int, lower: Int, groupStart: Int? = nil,
                                      validateSeam: Bool = true, in buffer: Buffer) -> Bool
     {
+        // A wrap flag is the terminal's own word that the rows are one line.
+        if lower >= 0, lower < buffer.lines.count, buffer.lines[lower].isWrapped {
+            return true
+        }
         guard let upperInfo = linkRowEdgeInfo(row: upper, in: buffer),
               let lowerInfo = linkRowEdgeInfo(row: lower, in: buffer)
         else {
@@ -8116,8 +8120,8 @@ open class Terminal {
             || (upperInfo.lastCol == cols - 2 && upperInfo.writtenEnd >= cols)
         if !isFull {
             // A wrapper that breaks at a link's own punctuation leaves the row
-            // short (vim's `linebreak` breaks after `/`, `.`, `-` and `?`), so
-            // a row that stops in the last fifth on one of those still joins,
+            // short (vim's `linebreak` breaks after `/` and `-`, among
+            // others), so a row that stops in the last fifth on one still joins,
             // but only onto more link: a first word with a separator inside
             // it (`keeps/going`), not a word of prose.
             let threshold = max(0, cols - max(2, cols / 5))
@@ -8128,11 +8132,6 @@ open class Terminal {
                 return false
             }
         }
-        // The space between two links is where a word wrapper breaks, so a
-        // row that begins with a scheme begins a link of its own.
-        guard !implicitRowBeginsWithScheme(lower, from: lowerInfo.firstCol, in: buffer) else {
-            return false
-        }
 
         let upperScalars = upperInfo.lastChar.unicodeScalars
         let lowerScalars = lowerInfo.firstChar.unicodeScalars
@@ -8142,6 +8141,14 @@ open class Terminal {
         guard upperScalars.allSatisfy({ Self.ghosttyContinuationCharacters.contains($0) }),
               lowerScalars.allSatisfy({ Self.ghosttyContinuationCharacters.contains($0) })
         else {
+            return false
+        }
+        // The space between two links is where a word wrapper breaks, so a
+        // row that begins with a scheme begins a link of its own. Unless the
+        // row above stops on a query's `=`, `&` or `?`, where a url carried
+        // in another url's query (`?next=https://...`) goes on.
+        if !Self.implicitQueryBreak.contains(upperInfo.lastChar),
+           implicitRowBeginsWithScheme(lower, from: lowerInfo.firstCol, in: buffer) {
             return false
         }
 
@@ -8318,7 +8325,13 @@ open class Terminal {
         return 0
     }
 
-    private static let implicitBreakAfter: Set<Character> = ["/", ".", "-", "?", "&", "=", "#"]
+    /// Where a short row may break a link. Not `.` or `?`: those end a
+    /// sentence as often as they sit in a link, and a sentence ending on a
+    /// link is followed by a filename often enough (`guide.` then
+    /// `README.md` opened `.../guide.README.md`, reviewed 2026-10-16).
+    private static let implicitBreakAfter: Set<Character> = ["/", "-", "&", "=", "#"]
+
+    private static let implicitQueryBreak: Set<Character> = ["=", "&", "?"]
 
     /// Whether a row's first word reads as the rest of a link: a separator
     /// inside it once a sentence's closing punctuation is set aside.
