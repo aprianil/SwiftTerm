@@ -3699,10 +3699,14 @@ open class TerminalView: NSView, NSTextInputClient, NSUserInterfaceValidations, 
             reportLink(at: hit.grid)
         }
         updateHoverLink(at: hit.grid)
-        // Over a link the hand is put back on every move: AppKit sets the
-        // arrow after a key change inside the app with no edge crossed, and
-        // a hosting view above can set its own. One comparison a move.
-        if linkHighlightRange != nil, NSCursor.current !== NSCursor.pointingHand {
+        // Over a link the hand is put back on a move: AppKit sets the arrow
+        // after a key change inside the app with no edge crossed. One
+        // comparison a move; the hit test only when the cursor is wrong, so
+        // a view laid over this one (moves reach a tracking area under it)
+        // keeps its own cursor.
+        if linkHighlightRange != nil, NSCursor.current !== NSCursor.pointingHand,
+           let hit = window?.contentView?.hitTest(event.locationInWindow),
+           hit === self || hit.isDescendant(of: self) {
             NSCursor.pointingHand.set()
         }
         
