@@ -1917,6 +1917,9 @@ extension TerminalView {
         guard linkVisibleForClick(match: match, hasCommandModifier: hasCommandModifier) else {
             return nil
         }
+        #if os(macOS)
+        guard passesFilter(match) else { return nil }
+        #endif
         if match.isExplicit,
            let payload = payloadString(at: position),
            let (url, params) = urlAndParamsFrom(payload: payload) {

@@ -154,6 +154,23 @@ final class AlwaysHoverLinkTests: XCTestCase {
         XCTAssertEqual(told, [true, false])
     }
 
+    func testAFilteredLinkIsNeitherPickedNorClicked () {
+        let view = makeView()
+        let top = view.getTerminal().buffer.yDisp
+        var asked = 0
+        view.implicitLinkFilter = { _ in asked += 1; return false }
+        view.updateHoverLink(at: Position(col: 10, row: top))
+        view.updateHoverLink(at: Position(col: 11, row: top))
+        XCTAssertNil(view.linkHighlightRange, "a link the embedder refuses is not picked")
+        XCTAssertNil(view.linkForClick(at: Position(col: 10, row: top), hasCommandModifier: false))
+        XCTAssertEqual(asked, 1, "one link, one question")
+
+        view.implicitLinkFilter = { _ in true }
+        view.lastHoverPosition = nil
+        view.updateHoverLink(at: Position(col: 10, row: top))
+        XCTAssertNotNil(view.linkHighlightRange)
+    }
+
     func testThePickChangesThePixelsAndNeverStrandsARow () {
         let view = makeView()
         let top = view.getTerminal().buffer.yDisp

@@ -1645,6 +1645,23 @@ open class TerminalView: NSView, NSTextInputClient, NSUserInterfaceValidations, 
         }
     }
 
+    /// Asked of an implicit link's text before the pointer picks it out or
+    /// a click opens it: false and it is plain text there. For a path that
+    /// is not on this machine, which would light up and then open nothing.
+    /// The last answer is kept, so a pointer along one link asks once.
+    public var implicitLinkFilter: ((String) -> Bool)? {
+        didSet { lastFilterAnswer = nil }
+    }
+    var lastFilterAnswer: (text: String, keep: Bool)?
+
+    func passesFilter(_ match: Terminal.LinkMatch) -> Bool {
+        guard !match.isExplicit, let implicitLinkFilter else { return true }
+        if let last = lastFilterAnswer, last.text == match.text { return last.keep }
+        let keep = implicitLinkFilter(match.text)
+        lastFilterAnswer = (match.text, keep)
+        return keep
+    }
+
     /// How far the link under the pointer has sunk under a press, drawn
     /// about its middle: 1 at rest. The embedder animates it, from
     /// `onLinkPress`.
@@ -3623,6 +3640,7 @@ open class TerminalView: NSView, NSTextInputClient, NSUserInterfaceValidations, 
         }
         lastHoverPosition = position
         let match = terminal.linkMatch(at: .buffer(position), mode: .explicitAndImplicit)
+            .flatMap { passesFilter($0) ? $0 : nil }
         let newRange = match?.rowRanges
         if newRange != linkHighlightRange {
             let oldRange = linkHighlightRange
