@@ -203,25 +203,30 @@ final class HardWrappedLinkTests: XCTestCase {
             "  -more/sidealong for it.",
         ])
         XCTAssertEqual(found[0], [url])
-        // Split one column short of the edge, the way claude splits.
+        // Split one column short of the edge, the way claude splits, a
+        // letters-only tail reads as the next word: the known residue.
         let long = "https://github.com/aprianil/sidealongandmorethings"
         let tail = links([
             "⏺ See " + long.prefix(41),
             "  " + long.dropFirst(41) + " today.",
         ])
-        XCTAssertEqual(tail[0], [long])
-        XCTAssertEqual(tail[1], [long])
+        XCTAssertEqual(tail[0], [String(long.prefix(41))])
     }
 
     /// Under a link that fits its row, the next row begins the next word,
-    /// whatever that word looks like (reviewed 2026-10-17).
+    /// whatever that word looks like (reviewed 2026-10-17). Ending three,
+    /// two and one columns short of the edge.
     func testTheNextWordUnderALinkThatFitsIsNotPartOfIt() {
-        for word in ["Then reload it.", "don't reload it.", "README.md has more.",
-                     "API keys too.", "v2.1 has it.", "10:30 today.", "src/App.swift:12 too."] {
-            let found = links([
-                "⏺ It is at https://example.com/docs/intro/abc",
-                "  " + word,
-            ])
+        for url in ["https://example.com/docs/intro/abc", "https://example.com/docs/intro/abcd",
+                    "https://example.com/docs/intro/abcde"] {
+            for word in ["Then reload it.", "don't reload it.", "configuration lives there.",
+                         "API keys too.", "- a bullet", "documentation here."] {
+                let found = links(["⏺ It is at " + url, "  " + word])
+                XCTAssertEqual(found[0], [url], "\(url) / \(word)")
+            }
+        }
+        for word in ["README.md has more.", "v2.1 has it.", "10:30 today.", "src/App.swift:12 too."] {
+            let found = links(["⏺ It is at https://example.com/docs/intro/abc", "  " + word])
             XCTAssertEqual(found[0], ["https://example.com/docs/intro/abc"], word)
         }
         // And prose above a path that starts a row is not part of it.
@@ -230,5 +235,31 @@ final class HardWrappedLinkTests: XCTestCase {
             "  Sources/sidealong/Panel/Header.swift:42.",
         ])
         XCTAssertNil(path[0])
+    }
+
+    /// The middle row of a url over three rows starts at the indent and
+    /// may stop one short; it is still the same link.
+    func testTheMiddleRowOfALongUrlCarriesItOn() {
+        let url = "https://example.com/" + String(repeating: "abcdefghi/", count: 7) + "end.html"
+        let rows = [
+            "⏺ See " + url.prefix(41),
+            "  " + url.dropFirst(41).prefix(45),
+            "  " + url.dropFirst(86),
+        ]
+        let found = links(rows)
+        XCTAssertEqual(found[0], [url])
+        XCTAssertEqual(found[1], [url])
+        XCTAssertEqual(found[2], [url])
+    }
+
+    /// A numbered list hangs its rows five in, the tool result's indent,
+    /// but its row is not a tool result's and joins only as prose would.
+    func testAListRowAtTheToolEdgeIsNotAToolResult() {
+        let found = links([
+            "  1. Open https://example.com/docs/intro/ab",
+            "     reload the page.",
+        ])
+        XCTAssertEqual(found[0], ["https://example.com/docs/intro/ab"])
+        XCTAssertNil(found[1])
     }
 }

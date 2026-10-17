@@ -8119,18 +8119,24 @@ open class Terminal {
         // wrapper moves a word that fits onto the next row whole, and splits
         // only a word longer than a row, which it starts where it is (`… ar`
         // and `tifact/PBRDQ…`) and runs to the edge or one column short of
-        // it. So a row that stops short joins when it stops within two
-        // columns of its edge and the word that crosses it, the upper's last
-        // and the lower's first together, is longer than a row and did not
-        // start the row. Under a word that fits, the next row begins the
+        // it. So a row that stops one short joins when the word that
+        // crosses it, the upper's last and the lower's first together, is
+        // longer than a row, did not start the row as a link of its own,
+        // and goes on as link (a digit, a link's punctuation, a capital past
+        // its first letter). Under a word that fits, the next row begins the
         // next word, and joining that glued it onto the link (`.../jklm`
         // and `and` opened `.../jklmand`; `views` and a path under it made
-        // one link of both; `.../abc` took `src/App.swift:12`).
+        // one link of both; `.../abc` took `src/App.swift:12`). Shape alone
+        // cannot tell a link that fits and ends one short from a split one,
+        // so a link-like word under it (a path, `v2.1`) still joins there,
+        // and a split that leaves only letters under it (`.../sidea` and
+        // `long`) stays cut. Both are rarer than the prose they keep out.
         let padded = upperInfo.writtenEnd >= cols && upperInfo.lastCol < cols - 1
+        let toolRow = upperInfo.firstChar == "⎿" || upperInfo.firstCol == Self.implicitToolMargin
         let isFull = upperInfo.lastCol == cols - 1
             || (upperInfo.lastCol == cols - 2 && padded)
             || (upperInfo.lastCol == cols - 1 - Self.implicitToolMargin
-                && lowerInfo.firstCol == Self.implicitToolMargin)
+                && lowerInfo.firstCol == Self.implicitToolMargin && toolRow)
         if !isFull {
             let threshold = max(0, cols - max(2, cols / 5))
             guard upperInfo.lastCol >= threshold,
@@ -8143,9 +8149,14 @@ open class Terminal {
             let upperWord = implicitLastWordStart(upper, lastCol: upperInfo.lastCol, in: buffer)
             let crossing = (upperInfo.lastCol + 1 - upperWord)
                 + implicitFirstWordLength(lower, from: lowerInfo.firstCol, in: buffer)
-            let splitLongWord = upperInfo.lastCol >= edge - 2
+            // A link that starts a row and stops short fit the row; a
+            // fragment that starts one is the middle of a longer word.
+            let startsRowAsLink = upperWord <= lowerInfo.firstCol
+                && implicitRowBeginsWithScheme(upper, from: upperWord, in: buffer)
+            let splitLongWord = upperInfo.lastCol == edge - 1
                 && crossing > width
-                && upperWord > lowerInfo.firstCol
+                && !startsRowAsLink
+                && implicitRowGoesOnAsLink(lower, from: lowerInfo.firstCol, in: buffer)
             // A wrapper that breaks at a link's own punctuation (vim's
             // `linebreak` breaks after `/` and `-`) splits a word that fits;
             // that joins only onto a first word with a link's separator in it.
@@ -8382,6 +8393,21 @@ open class Terminal {
             end += 1
         }
         return end - col
+    }
+
+    /// Whether a row's first word reads as more link than prose, once a
+    /// sentence's closing punctuation is set aside: a digit, a link's
+    /// punctuation, or a capital past its first letter (`DQWn8`).
+    private func implicitRowGoesOnAsLink(_ row: Int, from col: Int, in buffer: Buffer) -> Bool
+    {
+        let line = buffer.lines[row]
+        let length = implicitFirstWordLength(row, from: col, in: buffer)
+        let word = Array(implicitLineSegmentText(line: line, startCol: col, endCol: col + length)
+            .reversed().drop { ",.;:!?)'\"".contains($0) }.reversed())
+        if word.contains(where: { $0.isNumber || "/.?#=&_%~:+@".contains($0) }) {
+            return true
+        }
+        return word.dropFirst().contains { $0.isUppercase }
     }
 
     /// Whether a row's first word has a link's separator inside it, once a
