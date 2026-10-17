@@ -171,7 +171,7 @@ final class HardWrappedLinkTests: XCTestCase {
         XCTAssertEqual(tool[0], [url])
         XCTAssertEqual(tool[1], [url])
         let reply = links([
-            "  called logo patches: ⧉ https://claude.ai/ar",
+            "  called logo patches: ⧉ ⧉ https://claude.ai/ar",
             "  tifact/PBRDQWn8Aiqt5dWb5tXsmp",
         ])
         XCTAssertEqual(reply[0], [url])
@@ -184,16 +184,51 @@ final class HardWrappedLinkTests: XCTestCase {
         XCTAssertEqual(echo[1], [url])
     }
 
-    /// A word of prose under a short row is the next word, capitalised or
-    /// with an apostrophe in it.
-    func testProseUnderAShortRowIsNotPartOfTheLink() {
-        for word in ["Then reload it.", "don't reload it.", "well-known."] {
+    /// A tool result wraps characters, not words: a url that would fit is
+    /// cut where the row ends, five columns in (measured 2026-10-17).
+    func testAToolResultCutsAUrlThatFitsAndItIsOneLink() {
+        let found = links([
+            "  ⎿  Updated one two three https://example.",
+            "     com/docs/intro-page",
+        ])
+        XCTAssertEqual(found[0], ["https://example.com/docs/intro-page"])
+        XCTAssertEqual(found[1], ["https://example.com/docs/intro-page"])
+    }
+
+    /// A url longer than a row split where its tail is only letters.
+    func testALongUrlWithALettersOnlyTailIsOneLink() {
+        let url = "https://github.com/aprianil/sidealong-and-more/sidealong"
+        let found = links([
+            "⏺ See https://github.com/aprianil/sidealong-and",
+            "  -more/sidealong for it.",
+        ])
+        XCTAssertEqual(found[0], [url])
+        // Split one column short of the edge, the way claude splits.
+        let long = "https://github.com/aprianil/sidealongandmorethings"
+        let tail = links([
+            "⏺ See " + long.prefix(41),
+            "  " + long.dropFirst(41) + " today.",
+        ])
+        XCTAssertEqual(tail[0], [long])
+        XCTAssertEqual(tail[1], [long])
+    }
+
+    /// Under a link that fits its row, the next row begins the next word,
+    /// whatever that word looks like (reviewed 2026-10-17).
+    func testTheNextWordUnderALinkThatFitsIsNotPartOfIt() {
+        for word in ["Then reload it.", "don't reload it.", "README.md has more.",
+                     "API keys too.", "v2.1 has it.", "10:30 today.", "src/App.swift:12 too."] {
             let found = links([
                 "⏺ It is at https://example.com/docs/intro/abc",
                 "  " + word,
             ])
             XCTAssertEqual(found[0], ["https://example.com/docs/intro/abc"], word)
-            XCTAssertNil(found[1], word)
         }
+        // And prose above a path that starts a row is not part of it.
+        let path = links([
+            "⏺ The fix is a two line change in the views",
+            "  Sources/sidealong/Panel/Header.swift:42.",
+        ])
+        XCTAssertNil(path[0])
     }
 }

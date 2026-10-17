@@ -8107,26 +8107,51 @@ open class Terminal {
         }
 
         // Heuristic for program-rendered wraps (claude draws every row of its
-        // output itself, and none of them carries a wrap flag). A row that
-        // ends on the right edge, or one short with the row padded out to it
-        // (claude's echo of your message), was broken inside a word.
+        // output itself, and none of them carries a wrap flag). Where claude
+        // breaks a row, measured at 48 and 68 columns (2026-10-16, -17):
         //
-        // A row that stops short in the last fifth may be either. Where a
-        // wrapper breaks a long link is not the edge: claude's tool results
-        // wrap five columns in, and its own wrapper leaves a column or two
-        // when it splits a url (`PBR` and `DQWn8...`, `ar` and `tifact/...`,
-        // measured 2026-10-17). But a word wrapper leaves a row short too,
-        // and the next word under it is prose: joining that opened
-        // `.../aand` (2026-10-16). So a short row joins only onto what reads
-        // as more link, and never after a sentence's closing mark.
+        //   reply, command   words wrap; the edge is the last column
+        //   your message     words wrap; one blank column pads the edge
+        //   tool result      characters wrap, five columns in from the
+        //                    edge, under a five-column indent
+        //
+        // A row that ends on its edge was broken inside a word. A word
+        // wrapper moves a word that fits onto the next row whole, and splits
+        // only a word longer than a row, which it starts where it is (`… ar`
+        // and `tifact/PBRDQ…`) and runs to the edge or one column short of
+        // it. So a row that stops short joins when it stops within two
+        // columns of its edge and the word that crosses it, the upper's last
+        // and the lower's first together, is longer than a row and did not
+        // start the row. Under a word that fits, the next row begins the
+        // next word, and joining that glued it onto the link (`.../jklm`
+        // and `and` opened `.../jklmand`; `views` and a path under it made
+        // one link of both; `.../abc` took `src/App.swift:12`).
+        let padded = upperInfo.writtenEnd >= cols && upperInfo.lastCol < cols - 1
         let isFull = upperInfo.lastCol == cols - 1
-            || (upperInfo.lastCol == cols - 2 && upperInfo.writtenEnd >= cols)
+            || (upperInfo.lastCol == cols - 2 && padded)
+            || (upperInfo.lastCol == cols - 1 - Self.implicitToolMargin
+                && lowerInfo.firstCol == Self.implicitToolMargin)
         if !isFull {
             let threshold = max(0, cols - max(2, cols / 5))
             guard upperInfo.lastCol >= threshold,
-                  !Self.implicitSentenceEnd.contains(upperInfo.lastChar),
-                  implicitRowBeginsWithLinkRest(lower, from: lowerInfo.firstCol, in: buffer)
+                  !Self.implicitSentenceEnd.contains(upperInfo.lastChar)
             else {
+                return false
+            }
+            let edge = padded ? cols - 2 : cols - 1
+            let width = edge + 1 - lowerInfo.firstCol
+            let upperWord = implicitLastWordStart(upper, lastCol: upperInfo.lastCol, in: buffer)
+            let crossing = (upperInfo.lastCol + 1 - upperWord)
+                + implicitFirstWordLength(lower, from: lowerInfo.firstCol, in: buffer)
+            let splitLongWord = upperInfo.lastCol >= edge - 2
+                && crossing > width
+                && upperWord > lowerInfo.firstCol
+            // A wrapper that breaks at a link's own punctuation (vim's
+            // `linebreak` breaks after `/` and `-`) splits a word that fits;
+            // that joins only onto a first word with a link's separator in it.
+            let brokeAtPunctuation = Self.implicitBreakAfter.contains(upperInfo.lastChar)
+                && implicitRowBeginsWithLinkRest(lower, from: lowerInfo.firstCol, in: buffer)
+            guard splitLongWord || brokeAtPunctuation else {
                 return false
             }
         }
@@ -8330,24 +8355,44 @@ open class Terminal {
 
     private static let implicitQueryBreak: Set<Character> = ["=", "&", "?"]
 
-    /// Whether a row's first word reads as the rest of a link rather than a
-    /// word of prose, once a sentence's closing punctuation is set aside: a
-    /// link's own punctuation or a digit inside it (`tifact/PBRDQ`,
-    /// `8765/gli`), or a capital past its first letter (`DQWn8`). A word of
-    /// letters (`and`, `Then`) reads as prose. Not `-` or `'`: prose has
-    /// them (`well-known`, `don't`). So a url split where its tail is
-    /// letters only (`ei` and `ght`) is cut on a short row; on a full row
-    /// it joins.
+    /// Claude indents a tool result five columns and wraps it five short
+    /// of the edge (measured at 48 and 68 columns, 2026-10-17).
+    private static let implicitToolMargin = 5
+
+    private static let implicitBreakAfter: Set<Character> = ["/", "-", "&", "=", "#"]
+
+    /// The column where the word ending at `lastCol` starts.
+    private func implicitLastWordStart(_ row: Int, lastCol: Int, in buffer: Buffer) -> Int
+    {
+        let line = buffer.lines[row]
+        var col = lastCol
+        while col > 0, let ch = linkCharacterAt(line: line, col: col - 1), !ch.isWhitespace {
+            col -= 1
+        }
+        return col
+    }
+
+    /// How many columns the word starting at `col` takes.
+    private func implicitFirstWordLength(_ row: Int, from col: Int, in buffer: Buffer) -> Int
+    {
+        let line = buffer.lines[row]
+        let limit = min(cols, line.count)
+        var end = col
+        while end < limit, let ch = linkCharacterAt(line: line, col: end), !ch.isWhitespace {
+            end += 1
+        }
+        return end - col
+    }
+
+    /// Whether a row's first word has a link's separator inside it, once a
+    /// sentence's closing punctuation is set aside (`keeps/going`).
     private func implicitRowBeginsWithLinkRest(_ row: Int, from col: Int, in buffer: Buffer) -> Bool
     {
         let line = buffer.lines[row]
-        let text = implicitLineSegmentText(line: line, startCol: col, endCol: min(cols, line.count))
-        let word = Array(text.prefix { !$0.isWhitespace }
-            .reversed().drop { ",.;:!?)'\"".contains($0) }.reversed())
-        if word.contains(where: { $0.isNumber || "/.?#=&_%~:+@".contains($0) }) {
-            return true
-        }
-        return word.dropFirst().contains { $0.isUppercase }
+        let length = implicitFirstWordLength(row, from: col, in: buffer)
+        let word = implicitLineSegmentText(line: line, startCol: col, endCol: col + length)
+            .reversed().drop { ",.;:!?)'\"".contains($0) }.reversed()
+        return word.contains { "/.?#=&".contains($0) }
     }
 
     private static let implicitSchemeStart: NSRegularExpression? =
