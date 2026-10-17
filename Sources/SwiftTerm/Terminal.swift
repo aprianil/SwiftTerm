@@ -8107,26 +8107,24 @@ open class Terminal {
         }
 
         // Heuristic for program-rendered wraps (claude draws every row of its
-        // output itself, and none of them carries a wrap flag). A wrapper that
-        // breaks a word in the middle fills the row first, so the upper row's
-        // last character sits on the right edge, or one column short of it
-        // when the row is padded out to the edge (claude's echo of your
-        // message is 47 columns of text and one of its background). A row
-        // that stops sooner was broken at a space, and the next row begins
-        // the next word: joining it glued prose onto the link
-        // (`https://example.com/a` and `and` opened `.../aand`, measured
-        // 2026-10-16). Any row in the last fifth used to join.
+        // output itself, and none of them carries a wrap flag). A row that
+        // ends on the right edge, or one short with the row padded out to it
+        // (claude's echo of your message), was broken inside a word.
+        //
+        // A row that stops short in the last fifth may be either. Where a
+        // wrapper breaks a long link is not the edge: claude's tool results
+        // wrap five columns in, and its own wrapper leaves a column or two
+        // when it splits a url (`PBR` and `DQWn8...`, `ar` and `tifact/...`,
+        // measured 2026-10-17). But a word wrapper leaves a row short too,
+        // and the next word under it is prose: joining that opened
+        // `.../aand` (2026-10-16). So a short row joins only onto what reads
+        // as more link, and never after a sentence's closing mark.
         let isFull = upperInfo.lastCol == cols - 1
             || (upperInfo.lastCol == cols - 2 && upperInfo.writtenEnd >= cols)
         if !isFull {
-            // A wrapper that breaks at a link's own punctuation leaves the row
-            // short (vim's `linebreak` breaks after `/` and `-`, among
-            // others), so a row that stops in the last fifth on one still joins,
-            // but only onto more link: a first word with a separator inside
-            // it (`keeps/going`), not a word of prose.
             let threshold = max(0, cols - max(2, cols / 5))
             guard upperInfo.lastCol >= threshold,
-                  Self.implicitBreakAfter.contains(upperInfo.lastChar),
+                  !Self.implicitSentenceEnd.contains(upperInfo.lastChar),
                   implicitRowBeginsWithLinkRest(lower, from: lowerInfo.firstCol, in: buffer)
             else {
                 return false
@@ -8325,23 +8323,31 @@ open class Terminal {
         return 0
     }
 
-    /// Where a short row may break a link. Not `.` or `?`: those end a
-    /// sentence as often as they sit in a link, and a sentence ending on a
-    /// link is followed by a filename often enough (`guide.` then
-    /// `README.md` opened `.../guide.README.md`, reviewed 2026-10-16).
-    private static let implicitBreakAfter: Set<Character> = ["/", "-", "&", "=", "#"]
+    /// What ends a sentence or a clause. A link that ends a sentence is
+    /// followed by a filename often enough (`guide.` then `README.md`
+    /// opened `.../guide.README.md`, reviewed 2026-10-16).
+    private static let implicitSentenceEnd: Set<Character> = [".", ",", ";", "!", ")"]
 
     private static let implicitQueryBreak: Set<Character> = ["=", "&", "?"]
 
-    /// Whether a row's first word reads as the rest of a link: a separator
-    /// inside it once a sentence's closing punctuation is set aside.
+    /// Whether a row's first word reads as the rest of a link rather than a
+    /// word of prose, once a sentence's closing punctuation is set aside: a
+    /// link's own punctuation or a digit inside it (`tifact/PBRDQ`,
+    /// `8765/gli`), or a capital past its first letter (`DQWn8`). A word of
+    /// letters (`and`, `Then`) reads as prose. Not `-` or `'`: prose has
+    /// them (`well-known`, `don't`). So a url split where its tail is
+    /// letters only (`ei` and `ght`) is cut on a short row; on a full row
+    /// it joins.
     private func implicitRowBeginsWithLinkRest(_ row: Int, from col: Int, in buffer: Buffer) -> Bool
     {
         let line = buffer.lines[row]
         let text = implicitLineSegmentText(line: line, startCol: col, endCol: min(cols, line.count))
-        let word = text.prefix { !$0.isWhitespace }
-            .reversed().drop { ",.;:!?)'\"".contains($0) }.reversed()
-        return word.contains { "/.?#=&".contains($0) }
+        let word = Array(text.prefix { !$0.isWhitespace }
+            .reversed().drop { ",.;:!?)'\"".contains($0) }.reversed())
+        if word.contains(where: { $0.isNumber || "/.?#=&_%~:+@".contains($0) }) {
+            return true
+        }
+        return word.dropFirst().contains { $0.isUppercase }
     }
 
     private static let implicitSchemeStart: NSRegularExpression? =

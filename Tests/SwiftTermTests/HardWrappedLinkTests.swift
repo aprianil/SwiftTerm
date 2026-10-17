@@ -157,4 +157,43 @@ final class HardWrappedLinkTests: XCTestCase {
         ])
         XCTAssertEqual(found[0], ["https://a.example.com/login?next=abcdefghijk=https://b.example.com/cb"])
     }
+
+    /// Where claude breaks a long url is not the edge: a tool result wraps
+    /// five columns in, and its own wrapper leaves a column or two (all
+    /// three measured at 48 columns, 2026-10-17). A short row joins onto
+    /// what reads as more link.
+    func testAUrlClaudeBreaksShortOfTheEdgeIsOneLink() {
+        let url = "https://claude.ai/artifact/PBRDQWn8Aiqt5dWb5tXsmp"
+        let tool = links([
+            "  ⎿  Updated https://claude.ai/artifact/PBR",
+            "     DQWn8Aiqt5dWb5tXsmp",
+        ])
+        XCTAssertEqual(tool[0], [url])
+        XCTAssertEqual(tool[1], [url])
+        let reply = links([
+            "  called logo patches: ⧉ https://claude.ai/ar",
+            "  tifact/PBRDQWn8Aiqt5dWb5tXsmp",
+        ])
+        XCTAssertEqual(reply[0], [url])
+        XCTAssertEqual(reply[1], [url])
+        let echo = links([
+            echoRow("  new page called logo patches: X https://clau"),
+            echoRow("  de.ai/artifact/PBRDQWn8Aiqt5dWb5tXsmp"),
+        ])
+        XCTAssertEqual(echo[0], [url])
+        XCTAssertEqual(echo[1], [url])
+    }
+
+    /// A word of prose under a short row is the next word, capitalised or
+    /// with an apostrophe in it.
+    func testProseUnderAShortRowIsNotPartOfTheLink() {
+        for word in ["Then reload it.", "don't reload it.", "well-known."] {
+            let found = links([
+                "⏺ It is at https://example.com/docs/intro/abc",
+                "  " + word,
+            ])
+            XCTAssertEqual(found[0], ["https://example.com/docs/intro/abc"], word)
+            XCTAssertNil(found[1], word)
+        }
+    }
 }
